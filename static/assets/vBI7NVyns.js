@@ -1,0 +1,1 @@
+import{aL as r,aG as d,a4 as u}from"./vr0UQxwYG.js";function w(i,o={}){const{wait:s=150,immediate:a}=o;let e=()=>{i()};e=u(e,s);const n=()=>{a&&e(),window.addEventListener("resize",e)},t=()=>{window.removeEventListener("resize",e)};return r(()=>{n()}),d(()=>{t()}),{start:n,stop:t}}export{w as u};

@@ -1,0 +1,1 @@
+import{i as p,j as t}from"./vr0UQxwYG.js";const u=p(),o=()=>t.get({url:"/runner/list"}),r=n=>t.post({url:"/runner/runplugin",params:n}),s=(n,i)=>t.uploadFile({url:u.apiUrl+"/runner/upload",onUploadProgress:i,timeout:24*3600*1e3},n);export{r as a,o as b,s as p};

@@ -1,0 +1,1 @@
+import{n as r}from"./vr0UQxwYG.js";import{u as c}from"./vv5r8L9Qx.js";function l(t){let o,n=document.body;if(Reflect.has(t,"target")||Reflect.has(t,"props")){const e=t;o=e.props||{},n=e.target||document.body}else o=t;const s=r(o,void 0,!0);return[()=>{const e=c(n);e&&s.open(e)},()=>{s.close()},e=>{s.setTip(e)}]}export{l as u};

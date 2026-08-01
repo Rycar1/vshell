@@ -1,0 +1,99 @@
+# ============================================================================
+# VShell .gitignore
+# ============================================================================
+
+# --- Built binaries ---
+*.exe
+*.dll
+*.so
+*.elf
+*.bin
+vshell
+vshell-linux-amd64
+vshell-windows-amd64.exe
+
+# --- Agent build output ---
+agents/
+!agents/.gitkeep
+
+# --- Database ---
+*.db
+*.db-shm
+*.db-wal
+db/
+
+# --- Config (contains passwords/keys) ---
+conf/
+!conf/.gitkeep
+!conf/setting.conf
+!conf/server.pem
+
+# --- Certs & Keys ---
+certs/
+*.pem
+*.key
+*.crt
+!conf/server.pem
+
+# --- Uploads & downloads ---
+uploads/
+downloads/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Screenshots & Playwright artifacts ---
+.playwright-mcp/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Go ---
+*.test
+*.out
+vendor/
+
+# --- Temp ---
+tmp/
+temp/
+*.tmp
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Agent / AI artifacts ---
+.omo/
+.codegraph
+
+# --- Screenshots ---
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# --- Third-party tools ---
+plugins/
+
+# --- Test artifacts ---
+test_edit.txt
+test_wget.html
+qa_test_dir/
+test_setting.conf
+
+# --- Reverse-engineering tooling (private) ---
+scripts/
+
+# --- Original binary & license (private / large) ---
+v_windows_amd64/
+license.txt

@@ -1,0 +1,62 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f0f1a; color: #e0e0e0; }
+.layout { display: flex; min-height: 100vh; }
+
+.sidebar { width: 220px; background: #1a1a2e; border-right: 1px solid #2a2a4a; display: flex; flex-direction: column; padding: 0; }
+.sidebar-header { padding: 20px; font-size: 20px; font-weight: 700; color: #4a6cf7; border-bottom: 1px solid #2a2a4a; }
+.nav-item { padding: 12px 20px; color: #888; text-decoration: none; font-size: 14px; transition: all 0.2s; }
+.nav-item:hover, .nav-item.active { color: #fff; background: #2a2a4a; }
+.nav-item.active { border-left: 3px solid #4a6cf7; }
+.nav-spacer { flex: 1; }
+.nav-item.logout { border-top: 1px solid #2a2a4a; color: #ff4757; }
+
+.main-content { flex: 1; padding: 24px; }
+.page-header { margin-bottom: 24px; }
+.page-header h1 { font-size: 24px; color: #fff; }
+.page-header p { color: #888; margin-top: 4px; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-card { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 20px; }
+.stat-value { font-size: 32px; font-weight: 700; color: #4a6cf7; }
+.stat-label { font-size: 13px; color: #888; margin-top: 4px; }
+
+.card { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.card h2 { font-size: 16px; color: #fff; margin-bottom: 16px; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 10px 12px; color: #888; font-size: 12px; text-transform: uppercase; border-bottom: 1px solid #2a2a4a; }
+td { padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #1a1a2e; color: #ccc; }
+tr:hover td { background: #2a2a4a; }
+
+input, select, textarea { background: #0f0f1a; border: 1px solid #2a2a4a; border-radius: 4px; color: #e0e0e0; padding: 8px 12px; font-size: 14px; outline: none; }
+input:focus, select:focus { border-color: #4a6cf7; }
+.btn { background: #4a6cf7; color: #fff; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer; font-size: 14px; }
+.btn:hover { background: #3b5de7; }
+.btn-danger { background: #ff4757; }
+.btn-danger:hover { background: #e83e4e; }
+.btn-success { background: #2ed573; }
+.btn-success:hover { background: #26bf65; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.badge-on { background: #2ed57320; color: #2ed573; border: 1px solid #2ed57340; }
+.badge-off { background: #ff475720; color: #ff4757; border: 1px solid #ff475740; }
+
+.terminal { background: #000; color: #00ff00; font-family: "Courier New", monospace; padding: 16px; border-radius: 8px; min-height: 300px; white-space: pre-wrap; font-size: 13px; line-height: 1.5; overflow-y: auto; }
+.terminal-input { display: flex; gap: 8px; margin-top: 8px; }
+.terminal-input input { flex: 1; background: #000; color: #00ff00; border: 1px solid #333; font-family: "Courier New", monospace; }
+
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.form-group { flex: 1; min-width: 200px; }
+.form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.form-group input, .form-group select { width: 100%; }
+
+.tabs { display: flex; gap: 0; border-bottom: 1px solid #2a2a4a; margin-bottom: 20px; }
+.tab { padding: 10px 20px; cursor: pointer; color: #888; border-bottom: 2px solid transparent; }
+.tab:hover { color: #fff; }
+.tab.active { color: #4a6cf7; border-bottom-color: #4a6cf7; }
+
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 24px; width: 500px; max-width: 90%; }
+.modal h2 { color: #fff; margin-bottom: 16px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
