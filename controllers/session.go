@@ -1,3 +1,4 @@
+// Package controllers 实现 Agent 会话（session）管理控制器。
 // Package controllers implements the session management controller for agent sessions.
 //
 // Session management was reverse-engineered from the original vshell binary.
@@ -55,6 +56,7 @@ var (
 	sessionIDSeq    int64
 )
 
+// GenerateAgentSessionID 创建唯一会话标识，格式与原版一致：sess_<listenerID>_<timestamp>。
 // GenerateAgentSessionID creates a unique session identifier.
 // Format matches original binary: sess_<listenerID>_<timestamp>
 func GenerateAgentSessionID(listenerID int64) string {
@@ -65,6 +67,7 @@ func GenerateAgentSessionID(listenerID int64) string {
 	return fmt.Sprintf("sess_%d_%d_%d", listenerID, seq, time.Now().UnixNano())
 }
 
+// RegisterAgentSession 创建并存储新的 Agent 会话记录，在 Agent 通过 WebSocket/KCP/DNS 签到时调用。
 // RegisterAgentSession creates and stores a new agent session record.
 // Called when an agent checks in over WebSocket, KCP, or DNS.
 func RegisterAgentSession(clientID, listenerID int64, sessionType, remoteAddr string, commandID int64) *AgentSessionState {
@@ -92,6 +95,7 @@ func RegisterAgentSession(clientID, listenerID int64, sessionType, remoteAddr st
 	return session
 }
 
+// UpdateAgentSession 更新会话的最后心跳时间。
 // UpdateAgentSession updates the last-seen time for a session.
 func UpdateAgentSession(sessionID string) {
 	now := time.Now()
@@ -108,6 +112,7 @@ func UpdateAgentSession(sessionID string) {
 	agentSessionsMu.Unlock()
 }
 
+// CloseAgentSession 将会话标记为关闭并清理。
 // CloseAgentSession marks a session as closed and cleans up.
 func CloseAgentSession(sessionID string) {
 	agentSessionsMu.Lock()
@@ -122,6 +127,7 @@ func CloseAgentSession(sessionID string) {
 	}
 }
 
+// GetAgentSession 按 ID 获取会话。
 // GetAgentSession retrieves a session by ID.
 func GetAgentSession(sessionID string) *AgentSessionState {
 	agentSessionsMu.RLock()
@@ -138,6 +144,7 @@ func GetAgentSession(sessionID string) *AgentSessionState {
 	return nil
 }
 
+// ListAgentSessions 返回指定客户端的会话。
 // ListAgentSessions returns sessions for a specific client.
 func ListAgentSessions(clientID int64) []*AgentSessionState {
 	loadAgentSessionsFromDB(clientID)
@@ -155,11 +162,13 @@ func ListAgentSessions(clientID int64) []*AgentSessionState {
 	return result
 }
 
+// ListAllAgentSessions 返回全部活跃会话（供仪表盘使用）。
 // ListAllAgentSessions returns all active sessions (for dashboard).
 func ListAllAgentSessions() []*AgentSessionState {
 	return ListAgentSessions(0)
 }
 
+// CleanupStaleSessions 移除客户端离线超过指定时长的过期会话。
 // CleanupStaleSessions removes sessions whose clients have been offline
 // longer than the specified duration.
 func CleanupStaleSessions(maxAge time.Duration) int {
@@ -253,12 +262,15 @@ func fromModelAgentSession(session *models.AgentSession) *AgentSessionState {
 // SessionController — HTTP API for agent session management
 // ============================================================================
 
+// sessionController 管理客户端 Agent 会话操作，对应原版二进制的会话管理端点。
 // sessionController manages client agent session operations.
 // Maps to the original binary's session management endpoints.
 type sessionController struct {
 	BaseController
 }
 
+// Get 列出指定客户端的全部会话（GET /api/session/list?client_id=<id>）。
+// 原版从内存会话 map 返回记录而非数据库，会话是临时运行时对象。
 // Get lists all sessions for a client.
 // GET /api/session/list?client_id=<id>
 // The original binary returns session records from its in-memory session map,
@@ -304,6 +316,8 @@ func (c *sessionController) Get() {
 	}, len(allSessions)))
 }
 
+// Post 与客户端 Agent 创建新的交互会话（POST /api/session）。
+// 原版向 Agent 派发 shell 初始化命令，然后返回 session_id 供客户端经 WebSocket 连接。
 // Post creates a new interactive session with a client agent.
 // POST /api/session
 // Body: {"client_id": 1, "type": "cmd", "rows": 24, "cols": 80}

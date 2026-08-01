@@ -1,3 +1,6 @@
+// Package controllers/login 实现登录认证：POST /login、用户信息、登出与 XSRF。
+// Package controllers/login implements login authentication: POST /login, user
+// info, logout, and XSRF.
 package controllers
 
 import (
@@ -11,16 +14,19 @@ import (
 	"vshell/utils"
 )
 
-// LoginController handles authentication
+// LoginController 处理认证。
+// LoginController handles authentication.
 type LoginController struct {
 	BaseController
 }
 
+// GetUserInfo 是原版二进制的 action 名称（nTApp6jPzv.(*LoginController).GetUserInfo）。
 // GetUserInfo is the original binary's action name
 // (nTApp6jPzv.(*LoginController).GetUserInfo).
 func (c *LoginController) GetUserInfo() { c.Get() }
 
-// Get handles GET /login - serves SPA index.html
+// Get 处理 GET /login——提供 SPA index.html。
+// Get handles GET /login - serves SPA index.html.
 func (c *LoginController) Get() {
 	// Check if already authenticated via header token
 	token := c.Ctx.Request.Header.Get("X-Token")
@@ -38,11 +44,13 @@ func (c *LoginController) Get() {
 	http.ServeFile(c.Ctx.ResponseWriter, c.Ctx.Request, "static/index.html")
 }
 
+// Login 是原版二进制的 action 名称（nTApp6jPzv.(*LoginController).Login）。
 // Login is the original binary's action name
 // (nTApp6jPzv.(*LoginController).Login).
 func (c *LoginController) Login() { c.Post() }
 
-// Post handles POST /login - authenticates user (original binary format)
+// Post 处理 POST /login——用户认证（原版二进制格式）。
+// Post handles POST /login - authenticates user (original binary format).
 func (c *LoginController) Post() {
 	var req models.LoginRequest
 	if err := json.NewDecoder(c.Ctx.Request.Body).Decode(&req); err != nil {
@@ -123,7 +131,8 @@ func (c *LoginController) Post() {
 	})
 }
 
-// Logout handles GET /logout
+// Logout 处理 GET /logout。
+// Logout handles GET /logout.
 func (c *LoginController) Logout() {
 	c.DelSession("user_id")
 	c.DelSession("username")
@@ -131,8 +140,9 @@ func (c *LoginController) Logout() {
 	c.Redirect("/login", http.StatusFound)
 }
 
-// Prepare middleware - checks authentication for protected routes
-// Supports both Header authorization and ?token= URL parameter (original binary format)
+// Prepare 中间件——检查受保护路由的认证，支持 Header 授权与 ?token= URL 参数（原版格式）。
+// Prepare middleware - checks authentication for protected routes.
+// Supports both Header authorization and ?token= URL parameter (original binary format).
 func (c *LoginController) Prepare() {
 	// Skip auth check for login page and API
 	if c.Ctx.Request.URL.Path == "/login" || c.Ctx.Request.URL.Path == "/api/login" {
@@ -196,22 +206,26 @@ func (c *LoginController) Prepare() {
 	}
 }
 
-// CheckXSRFCookie checks XSRF cookie
+// CheckXSRFCookie 检查 XSRF Cookie。
+// CheckXSRFCookie checks XSRF cookie.
 func (c *LoginController) CheckXSRFCookie() bool {
 	return true
 }
 
-// XSRFFormHTML returns XSRF form HTML
+// XSRFFormHTML 返回 XSRF 表单 HTML。
+// XSRFFormHTML returns XSRF form HTML.
 func (c *LoginController) XSRFFormHTML() string {
 	return ""
 }
 
-// XSRFToken generates XSRF token
+// XSRFToken 生成 XSRF 令牌。
+// XSRFToken generates XSRF token.
 func (c *LoginController) XSRFToken() string {
 	return c.GetSecureCookie(utils.GetJWTSecret(), "_xsrf")
 }
 
 // parseJSONBody attempts to parse the request body as JSON and populate a target.
+// parseJSONBody 尝试将请求体解析为 JSON；成功返回 true，否则（表单或空体）返回 false。
 // Returns true if the body was valid JSON, false otherwise (body is form-encoded or empty).
 func parseJSONBody(r *http.Request, target interface{}) bool {
 	ct := r.Header.Get("Content-Type")

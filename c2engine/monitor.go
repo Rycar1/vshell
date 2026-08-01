@@ -10,9 +10,11 @@ import (
 
 // ============================================================================
 // Real-time System Monitor — provides live system stats for the dashboard
+// 实时系统监视器——为仪表盘提供实时系统统计
 // ============================================================================
 
-// SystemMonitor collects real-time system resource metrics
+// SystemMonitor 采集实时系统资源指标。
+// SystemMonitor collects real-time system resource metrics.
 type SystemMonitor struct {
 	mu           sync.RWMutex
 	startTime    time.Time
@@ -23,7 +25,8 @@ type SystemMonitor struct {
 var sysmon *SystemMonitor
 var sysmonOnce sync.Once
 
-// GetSystemMonitor returns the singleton system monitor
+// GetSystemMonitor 返回系统监视器单例。
+// GetSystemMonitor returns the singleton system monitor.
 func GetSystemMonitor() *SystemMonitor {
 	sysmonOnce.Do(func() {
 		sysmon = &SystemMonitor{
@@ -33,7 +36,8 @@ func GetSystemMonitor() *SystemMonitor {
 	return sysmon
 }
 
-// ResourceStats holds live system resource metrics
+// ResourceStats 保存实时系统资源指标。
+// ResourceStats holds live system resource metrics.
 type ResourceStats struct {
 	CPUPercent       float64 `json:"cpu_percent"`
 	MemPercent       float64 `json:"mem_percent"`
@@ -59,7 +63,8 @@ type ResourceStats struct {
 	AppVersion       string  `json:"app_version"`
 }
 
-// Collect gathers all system resource statistics for the dashboard
+// Collect 收集仪表盘所需的全部系统资源统计。
+// Collect gathers all system resource statistics for the dashboard.
 func (sm *SystemMonitor) Collect(config *Config) *ResourceStats {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

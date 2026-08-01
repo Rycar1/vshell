@@ -1,10 +1,14 @@
+// Package models 定义 Web 管理面板的数据模型（客户端、监听器、隧道、命令、会话等）。
+// Package models defines the data models for the web management panel
+// (clients, listeners, tunnels, commands, sessions, etc.).
 package models
 
 import (
 	"time"
 )
 
-// Client represents a connected agent/client
+// Client 表示一个已连接的 Agent / 客户端。
+// Client represents a connected agent/client.
 type Client struct {
 	ID            int64     `json:"Id"`
 	IsConnect     bool      `json:"IsConnect"`
@@ -32,7 +36,8 @@ type Client struct {
 	LastSeen      time.Time `json:"-"`
 }
 
-// Listener represents a C2 listener configuration
+// Listener 表示一条 C2 监听器配置。
+// Listener represents a C2 listener configuration.
 type Listener struct {
 	ID                int64     `json:"Id"`
 	Status            bool      `json:"Status"`
@@ -52,7 +57,8 @@ type Listener struct {
 	CreatedAt         time.Time `json:"-"`
 }
 
-// Tunnel represents a tunnel/proxy configuration
+// Tunnel 表示服务端与 Agent 之间的隧道/代理配置。
+// Tunnel represents a tunnel/proxy configuration between server and agent.
 type Tunnel struct {
 	ID                  int64     `json:"Id"`
 	Port                int       `json:"Port"`
@@ -81,7 +87,8 @@ type Tunnel struct {
 	HealthCheckTarget   string    `json:"HealthCheckTarget"`
 }
 
-// Host represents a reverse proxy Host configuration
+// Host 表示一条反代 Host 配置。
+// Host represents a reverse proxy Host configuration.
 type Host struct {
 	ID                  int64     `json:"Id"`
 	Host                string    `json:"Host"`
@@ -108,7 +115,8 @@ type Host struct {
 	HealthCheckTarget   string    `json:"HealthCheckTarget"`
 }
 
-// User represents the web admin user
+// User 表示 Web 管理员用户。
+// User represents the web admin user.
 type User struct {
 	ID       int64  `json:"Id"`
 	Username string `json:"username"`
@@ -116,7 +124,8 @@ type User struct {
 	Role     string `json:"role"`
 }
 
-// Session represents a user web session
+// Session 表示用户 Web 登录会话。
+// Session represents a user web login session.
 type Session struct {
 	SessionID string    `json:"session_Id"`
 	UserID    int64     `json:"user_Id"`
@@ -126,7 +135,8 @@ type Session struct {
 	IP        string    `json:"ip"`
 }
 
-// AgentSession represents a persistent interactive agent session.
+// AgentSession 表示一条持久的交互式 Agent 会话（如终端、屏幕流）。
+// AgentSession represents a persistent interactive agent session (terminal, screen stream).
 type AgentSession struct {
 	ID          string    `json:"Id"`
 	ClientID    int64     `json:"ClientId"`
@@ -140,7 +150,8 @@ type AgentSession struct {
 	Description string    `json:"description"`
 }
 
-// Command represents a command sent to a client
+// Command 表示下发到客户端的一条命令任务。
+// Command represents a command task sent to a client.
 type Command struct {
 	ID       int64      `json:"Id"`
 	ClientID int64      `json:"ClientId"`
@@ -152,8 +163,7 @@ type Command struct {
 	Timeout  int        `json:"timeout"`
 }
 
-// API Response types
-
+// API Response types — API 响应类型定义
 type (
 	LoginRequest struct {
 		Username string `json:"username" form:"username"`
@@ -208,7 +218,8 @@ type (
 	}
 )
 
-// Plugin represents a loaded plugin
+// Plugin 表示已加载的插件（exe/dll/elf/so）。
+// Plugin represents a loaded plugin (exe/dll/elf/so).
 type Plugin struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`

@@ -1,3 +1,6 @@
+// Package c2engine/result_forward 定义流式结果转发钩子：将终端输出与屏幕帧实时中继给 Web 查看者。
+// Package c2engine/result_forward defines the streaming-result forwarding hook:
+// relays terminal output and screen frames live to web viewers.
 package c2engine
 
 import "strings"
@@ -13,12 +16,15 @@ import "strings"
 
 var resultForwardHook func(clientID int64, result string)
 
+// SetResultForwardHook 注册控制器侧的转发器（包初始化时调用一次），传 nil 注销。
 // SetResultForwardHook registers the controller-side forwarder. Called once at
 // package init. Passing nil unregisters.
 func SetResultForwardHook(f func(clientID int64, result string)) {
 	resultForwardHook = f
 }
 
+// forwardStreamingResult 将流式结果交给注册的钩子。
+// 返回 true 表示结果是流式类型（无论是否注册了钩子），调用方可将之视为已消费。
 // forwardStreamingResult hands a streaming result to the registered hook.
 // Returns true if the result was a streaming type (whether or not a hook was
 // registered), so callers can treat it as consumed.
@@ -32,6 +38,7 @@ func forwardStreamingResult(clientID int64, result string) bool {
 	return true
 }
 
+// IsStreamingResult 判断结果负载是否为必须转发给 WebSocket 查看者（而非仅存储）的流式类型。
 // IsStreamingResult reports whether a result payload is a live-streaming type
 // that must be forwarded to a WebSocket viewer rather than only stored.
 func IsStreamingResult(result string) bool {

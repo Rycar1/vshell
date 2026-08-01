@@ -1,3 +1,6 @@
+// Package c2engine 实现 vshell 的 C2（命令与控制）引擎，
+// 对应原版二进制中的 eSxbx2zKVifD 包。管理 C2 监听器、Agent 客户端、隧道、
+// 反向代理、任务调度与流量控制。
 // Package c2engine implements the C2 (Command & Control) engine for vshell.
 // This is the reverse-engineered equivalent of the eSxbx2zKVifD package
 // from the original binary. It manages C2 listeners, agent clients, tunnels,
@@ -14,9 +17,11 @@ import (
 
 // ============================================================================
 // Core Types (reverse-engineered from eSxbx2zKVifD package)
+// 核心类型（逆向自原版 eSxbx2zKVifD 包）
 // ============================================================================
 
-// Flow tracks traffic statistics for clients and tunnels
+// Flow 跟踪客户端与隧道的流量统计。
+// Flow tracks traffic statistics for clients and tunnels.
 type Flow struct {
 	sync.RWMutex
 	InletFlow  int64 `json:"InletFlow"`
@@ -24,21 +29,24 @@ type Flow struct {
 	FlowLimit  int64 `json:"FlowLimit"`
 }
 
-// AddInlet adds bytes to inlet flow counter
+// AddInlet 增加入站流量计数。
+// AddInlet adds bytes to inlet flow counter.
 func (f *Flow) AddInlet(n int64) {
 	f.Lock()
 	defer f.Unlock()
 	f.InletFlow += n
 }
 
-// AddExport adds bytes to exPort flow counter
+// AddExport 增加出站流量计数。
+// AddExport adds bytes to export flow counter.
 func (f *Flow) AddExport(n int64) {
 	f.Lock()
 	defer f.Unlock()
 	f.ExportFlow += n
 }
 
-// IsOverLimit checks if either flow direction exceeds limits
+// IsOverLimit 检查任一方向流量是否超限。
+// IsOverLimit checks if either flow direction exceeds limits.
 func (f *Flow) IsOverLimit() bool {
 	f.RLock()
 	defer f.RUnlock()
@@ -48,7 +56,8 @@ func (f *Flow) IsOverLimit() bool {
 	return f.InletFlow > f.FlowLimit || f.ExportFlow > f.FlowLimit
 }
 
-// Health represents health check configuration for tunnels/Hosts
+// Health 表示隧道/Host 的健康检查配置。
+// Health represents health check configuration for tunnels/Hosts.
 type Health struct {
 	sync.RWMutex
 	CheckTimeout    time.Duration `json:"CheckTimeout"`
@@ -61,14 +70,16 @@ type Health struct {
 	failCount       int
 }
 
-// IsFailing checks if health has exceeded fail threshold
+// IsFailing 检查连续失败是否已达阈值。
+// IsFailing checks if health has exceeded fail threshold.
 func (h *Health) IsFailing() bool {
 	h.RLock()
 	defer h.RUnlock()
 	return h.failCount >= h.MaxFail
 }
 
-// RecordFail increments the fail counter
+// RecordFail 递增失败计数。
+// RecordFail increments the fail counter.
 func (h *Health) RecordFail() {
 	h.Lock()
 	defer h.Unlock()
@@ -76,7 +87,8 @@ func (h *Health) RecordFail() {
 	h.NextCheckTime = time.Now().Add(h.CheckInterval)
 }
 
-// RecordSuccess resets the fail counter
+// RecordSuccess 重置失败计数。
+// RecordSuccess resets the fail counter.
 func (h *Health) RecordSuccess() {
 	h.Lock()
 	defer h.Unlock()
@@ -84,13 +96,15 @@ func (h *Health) RecordSuccess() {
 	h.NextCheckTime = time.Now().Add(h.CheckInterval)
 }
 
-// Pair represents a key-value configuration pair
+// Pair 表示键值配置对。
+// Pair represents a key-value configuration pair.
 type Pair struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
 
-// PairList implements sort.Interface for []Pair
+// PairList 为 []Pair 实现 sort.Interface。
+// PairList implements sort.Interface for []Pair.
 type PairList []Pair
 
 func (p PairList) Len() int           { return len(p) }
@@ -101,7 +115,8 @@ func (p PairList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 // Client type (agent endpoint)
 // ============================================================================
 
-// Client represents a connected C2 agent
+// Client 表示一个已连接的 C2 Agent。
+// Client represents a connected C2 agent.
 type Client struct {
 	sync.RWMutex
 	ID             int64     `json:"Id"`
@@ -133,7 +148,8 @@ type Client struct {
 	conns   int            // current connection count
 }
 
-// NewClient creates a new client
+// NewClient 创建新客户端。
+// NewClient creates a new client.
 func NewClient(id int64, verifyKey, clientType, addr string) *Client {
 	return &Client{
 		ID:        id,
@@ -151,7 +167,8 @@ func NewClient(id int64, verifyKey, clientType, addr string) *Client {
 	}
 }
 
-// CutConn decrements the connection count
+// CutConn 减少连接计数。
+// CutConn decrements the connection count.
 func (c *Client) CutConn() {
 	c.Lock()
 	defer c.Unlock()
@@ -161,7 +178,8 @@ func (c *Client) CutConn() {
 	c.NowConn = c.conns
 }
 
-// AddConn increments the connection count
+// AddConn 增加连接计数。
+// AddConn increments the connection count.
 func (c *Client) AddConn() {
 	c.Lock()
 	defer c.Unlock()
@@ -169,63 +187,72 @@ func (c *Client) AddConn() {
 	c.NowConn = c.conns
 }
 
-// GetConn returns the current connection count
+// GetConn 返回当前连接数。
+// GetConn returns the current connection count.
 func (c *Client) GetConn() int {
 	c.RLock()
 	defer c.RUnlock()
 	return c.conns
 }
 
-// HasTunnel checks if the client has a specific tunnel
+// HasTunnel 检查客户端是否拥有指定隧道。
+// HasTunnel checks if the client has a specific tunnel.
 func (c *Client) HasTunnel(tunnelID int64) bool {
 	c.RLock()
 	defer c.RUnlock()
 	return c.tunnels[tunnelID]
 }
 
-// GetTunnelNum returns the number of active tunnels
+// GetTunnelNum 返回活跃隧道数量。
+// GetTunnelNum returns the number of active tunnels.
 func (c *Client) GetTunnelNum() int {
 	c.RLock()
 	defer c.RUnlock()
 	return len(c.tunnels)
 }
 
-// HasHost checks if the client has a specific reverse proxy Host
+// HasHost 检查客户端是否拥有指定反向代理 Host。
+// HasHost checks if the client has a specific reverse proxy Host.
 func (c *Client) HasHost(HostID int64) bool {
 	c.RLock()
 	defer c.RUnlock()
 	return c.Hosts[HostID]
 }
 
-// AddTunnel registers a tunnel with this client
+// AddTunnel 为该客户端注册隧道。
+// AddTunnel registers a tunnel with this client.
 func (c *Client) AddTunnel(tunnelID int64) {
 	c.Lock()
 	defer c.Unlock()
 	c.tunnels[tunnelID] = true
 }
 
-// RemoveTunnel unregisters a tunnel
+// RemoveTunnel 注销隧道。
+// RemoveTunnel unregisters a tunnel.
 func (c *Client) RemoveTunnel(tunnelID int64) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.tunnels, tunnelID)
 }
 
-// AddHost registers a reverse proxy Host
+// AddHost 注册反向代理 Host。
+// AddHost registers a reverse proxy Host.
 func (c *Client) AddHost(HostID int64) {
 	c.Lock()
 	defer c.Unlock()
 	c.Hosts[HostID] = true
 }
 
-// RemoveHost unregisters a Host
+// RemoveHost 注销 Host。
+// RemoveHost unregisters a Host.
 func (c *Client) RemoveHost(HostID int64) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.Hosts, HostID)
 }
 
-// UpdateSeen updates the last seen timestamp
+// UpdateSeen 更新最后心跳时间戳。
+// UpdateSeen updates the last seen timestamp.
 func (c *Client) UpdateSeen() {
 	c.Lock()
 	defer c.Unlock()
@@ -237,7 +264,8 @@ func (c *Client) UpdateSeen() {
 // Listener type (C2 listener configuration)
 // ============================================================================
 
-// Listener represents a C2 listener endpoint
+// Listener 表示一个 C2 监听器端点。
+// Listener represents a C2 listener endpoint.
 type Listener struct {
 	sync.RWMutex
 	ID                int64     `json:"Id"`
@@ -262,14 +290,16 @@ type Listener struct {
 	stopCh    chan struct{}
 }
 
-// IsRunning returns whether the listener is active
+// IsRunning 返回监听器是否活跃。
+// IsRunning returns whether the listener is active.
 func (l *Listener) IsRunning() bool {
 	l.RLock()
 	defer l.RUnlock()
 	return l.isRunning
 }
 
-// SetRunning sets the running state
+// SetRunning 设置运行状态。
+// SetRunning sets the running state.
 func (l *Listener) SetRunning(running bool) {
 	l.Lock()
 	defer l.Unlock()
@@ -280,7 +310,8 @@ func (l *Listener) SetRunning(running bool) {
 // Tunnel type
 // ============================================================================
 
-// Tunnel represents a tunnel/proxy configuration between server and agent
+// Tunnel 表示服务器与 Agent 之间的隧道/代理配置。
+// Tunnel represents a tunnel/proxy configuration between server and agent.
 type Tunnel struct {
 	sync.RWMutex
 	ID                  int64     `json:"Id"`
@@ -302,7 +333,8 @@ type Tunnel struct {
 	Health              *Health   `json:"-"`
 }
 
-// NewTunnel creates a new tunnel configuration
+// NewTunnel 创建新隧道配置。
+// NewTunnel creates a new tunnel configuration.
 func NewTunnel(id, clientID int64, port int, mode, targetAddr string) *Tunnel {
 	return &Tunnel{
 		ID:         id,
@@ -325,7 +357,8 @@ func NewTunnel(id, clientID int64, port int, mode, targetAddr string) *Tunnel {
 // Host type (reverse proxy Host)
 // ============================================================================
 
-// Host represents a reverse proxy Host configuration
+// Host 表示反向代理 Host 配置。
+// Host represents a reverse proxy Host configuration.
 type Host struct {
 	sync.RWMutex
 	ID           int64     `json:"Id"`
@@ -345,7 +378,8 @@ type Host struct {
 	Health       *Health   `json:"-"`
 }
 
-// NewHost creates a new reverse proxy Host
+// NewHost 创建新反向代理 Host。
+// NewHost creates a new reverse proxy Host.
 func NewHost(id, clientID int64, host, targetStr, scheme string) *Host {
 	return &Host{
 		ID:        id,
@@ -366,21 +400,24 @@ func NewHost(id, clientID int64, host, targetStr, scheme string) *Host {
 // Target type (load-balanced target selection)
 // ============================================================================
 
-// Target represents a load-balanced target for tunnels
+// Target 表示隧道的负载均衡目标。
+// Target represents a load-balanced target for tunnels.
 type Target struct {
 	sync.RWMutex
 	targets []string
 	index   int
 }
 
-// NewTarget creates a new target list
+// NewTarget 创建新目标列表。
+// NewTarget creates a new target list.
 func NewTarget(targets ...string) *Target {
 	return &Target{
 		targets: targets,
 	}
 }
 
-// GetRandomTarget returns the next target using round-robin
+// GetRandomTarget 以轮询方式返回下一个目标。
+// GetRandomTarget returns the next target using round-robin.
 func (t *Target) GetRandomTarget() string {
 	t.Lock()
 	defer t.Unlock()
@@ -392,7 +429,8 @@ func (t *Target) GetRandomTarget() string {
 	return target
 }
 
-// AddTarget adds a target to the list
+// AddTarget 向列表添加目标。
+// AddTarget adds a target to the list.
 func (t *Target) AddTarget(target string) {
 	t.Lock()
 	defer t.Unlock()
@@ -403,7 +441,8 @@ func (t *Target) AddTarget(target string) {
 // TTask/Command types
 // ============================================================================
 
-// Task represents a command task sent to an agent
+// Task 表示发送给 Agent 的命令任务。
+// Task represents a command task sent to an agent.
 type Task struct {
 	ID         int64     `json:"Id"`
 	ClientID   int64     `json:"ClientId"`
@@ -420,18 +459,21 @@ type Task struct {
 // Settings type
 // ============================================================================
 
-// TargetSetting holds a target list configuration
+// TargetSetting 保存目标列表配置。
+// TargetSetting holds a target list configuration.
 type TargetSetting struct {
 	Targets []string `json:"targets"`
 }
 
-// ToJSON serializes targets to JSON
+// ToJSON 将目标序列化为 JSON。
+// ToJSON serializes targets to JSON.
 func (ts *TargetSetting) ToJSON() string {
 	data, _ := json.Marshal(ts)
 	return string(data)
 }
 
-// FromJSON deserializes targets from JSON
+// FromJSON 从 JSON 反序列化目标。
+// FromJSON deserializes targets from JSON.
 func (ts *TargetSetting) FromJSON(data string) error {
 	return json.Unmarshal([]byte(data), ts)
 }
@@ -485,7 +527,8 @@ const (
 	AgentTypeListenDLL = "listen_dll" // Listener-Mode DLL
 )
 
-// Config holds the engine configuration
+// Config 保存引擎配置。
+// Config holds the engine configuration.
 type Config struct {
 	DBPath        string `json:"db_path"`
 	WebPort       int    `json:"web_Port"`
@@ -497,7 +540,8 @@ type Config struct {
 	License       string `json:"license"`
 }
 
-// DefaultConfig returns the default engine configuration
+// DefaultConfig 返回默认引擎配置。
+// DefaultConfig returns the default engine configuration.
 func DefaultConfig() *Config {
 	return &Config{
 		WebPort:      8082,
@@ -518,7 +562,8 @@ func generateSecret() string {
 	return fmt.Sprintf("%x", b)
 }
 
-// Logf logs a message with the C2 prefix
+// Logf 以 C2 前缀记录日志。
+// Logf logs a message with the C2 prefix.
 func Logf(format string, args ...interface{}) {
 	log.Printf("[C2Engine] "+format, args...)
 }

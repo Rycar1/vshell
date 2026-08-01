@@ -1,3 +1,6 @@
+// Package controllers/client 实现客户端管理：拉黑/解封、删除、备注与列表（含在线状态）。
+// Package controllers/client implements client management: block/unblock, delete,
+// remark/note, and listing (with online status).
 package controllers
 
 import (
@@ -15,6 +18,7 @@ import (
 // Client Blocklist — reverse-engineered from original vshell binary
 // ============================================================================
 //
+// 原版二进制维护一个阻止重连的客户端 ID 黑名单。当客户端被拉黑时：
 // The original binary maintains a blocklist of client IDs that are prevented
 // from reconnecting. When a client is blocked:
 //   1. Its active connections are dropped via CutConn()
@@ -36,6 +40,7 @@ var (
 	blockedKeysByID = make(map[int64]string)
 )
 
+// IsBlocked 检查客户端 ID 是否在黑名单中；Agent 签到时会调用以拒绝被拉黑的 Agent。
 // IsBlocked checks if a client ID is in the blocklist.
 // Called during agent check-in to reject previously blocked agents.
 func IsBlocked(clientID int64) bool {
@@ -44,6 +49,7 @@ func IsBlocked(clientID int64) bool {
 	return blocklist[clientID]
 }
 
+// BlockClient 将客户端加入黑名单并断开其连接，同时按 VerifyKey 拉黑并删除记录。
 // BlockClient adds a client to the blocklist and drops its connections.
 // Called from ClientController.Block() and API handlers.
 func BlockClient(clientID int64) error {
@@ -79,6 +85,7 @@ func BlockClient(clientID int64) error {
 	return nil
 }
 
+// UnblockClient 将客户端移出黑名单并解除其 VerifyKey 拉黑。
 // UnblockClient removes a client from the blocklist.
 func UnblockClient(clientID int64) {
 	blocklistMu.Lock()
@@ -92,6 +99,7 @@ func UnblockClient(clientID int64) {
 	log.Printf("[Block] Client %d unblocked", clientID)
 }
 
+// LoadBlocklist 启动时从数据库加载被拉黑的客户端 ID（Status=false 的记录）。
 // LoadBlocklist loads blocked client IDs from database on startup.
 func LoadBlocklist() {
 	db := models.GetDB()
@@ -122,12 +130,14 @@ func LoadBlocklist() {
 // ClientController — enhanced with actual Block/Unblock, DelFile, DelProcess
 // ============================================================================
 
-// ClientController manages connected agents/clients
+// ClientController 管理已连接的 Agent / 客户端。
+// ClientController manages connected agents/clients.
 type ClientController struct {
 	BaseController
 }
 
-// Get lists all clients (both DB and online)
+// Get 列出全部客户端（合并数据库与引擎中的在线客户端并去重）。
+// Get lists all clients (both DB and online, deduplicated).
 func (c *ClientController) Get() {
 	db := models.GetDB()
 	if db == nil {
@@ -243,6 +253,8 @@ func (c *ClientController) Get() {
 	})
 }
 
+// engineClientToModel 将引擎客户端记录转换为 Web 客户端列表使用的 models.Client。
+// 两个结构体共享 JSON 字段标签；保留引擎 ID 以便命令派发（按引擎 ID 寻址）对在线 Agent 持续可用。
 // engineClientToModel converts an engine client record into the models.Client
 // shape used by the web client list. The engine and models structs share the
 // same JSON field tags; engine IDs are preserved so command dispatch (which
@@ -276,6 +288,7 @@ func engineClientToModel(ec *c2engine.Client) *models.Client {
 	}
 }
 
+// Delete 从数据库与引擎中删除客户端。
 // Delete removes a client from the database and engine.
 func (c *ClientController) Delete() {
 	id, _ := c.GetInt64("id")
@@ -301,6 +314,9 @@ func (c *ClientController) Delete() {
 	c.JSONOk(map[string]interface{}{"deleted_id": id})
 }
 
+// Block 拉黑客户端：加入黑名单并断开连接（POST /api/client/block）。
+// 原版流程：1) 数据库标记 Status=false；2) 通过 CutConn() 断开连接；
+// 3) 向 Agent 发送关闭信号；4) 阻止后续重连。
 // Block blocks a client — adds to blocklist, drops connections.
 // POST /api/client/block
 //
@@ -336,6 +352,7 @@ func (c *ClientController) Block() {
 	})
 }
 
+// Unblock 解封客户端——移出黑名单，允许重新连接（POST /api/client/unblock）。
 // Unblock unblocks a client — removes from blocklist, allows reconnection.
 // POST /api/client/unblock
 func (c *ClientController) Unblock() {
@@ -362,6 +379,8 @@ func (c *ClientController) Unblock() {
 	})
 }
 
+// Note 为客户端设置备注并持久化到数据库（POST /api/client/note）。
+// 原版同时更新数据库记录与内存中的客户端对象。
 // Note sets a remark/note on a client and persists to database.
 // POST /api/client/note
 //
@@ -397,6 +416,7 @@ func (c *ClientController) Note() {
 	})
 }
 
+// CheckIn 处理模拟客户端签到（用于测试，POST /api/client/checkin）。
 // CheckIn handles a simulated client check-in (for testing).
 // POST /api/client/checkin
 func (c *ClientController) CheckIn() {

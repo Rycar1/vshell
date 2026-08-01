@@ -1,3 +1,5 @@
+// Package controllers/listener 实现 C2 监听器的管理（增删改查、启停）。
+// Package controllers/listener implements C2 listener management (CRUD, start/stop).
 package controllers
 
 import (
@@ -8,12 +10,14 @@ import (
 	"vshell/models"
 )
 
-// ListenerController manages C2 listeners
+// ListenerController 管理 C2 监听器。
+// ListenerController manages C2 listeners.
 type ListenerController struct {
 	BaseController
 }
 
-// Get lists all listeners
+// Get 列出全部监听器。
+// Get lists all listeners.
 func (c *ListenerController) Get() {
 	db := models.GetDB()
 	if db == nil {
@@ -33,7 +37,8 @@ func (c *ListenerController) Get() {
 	c.JSONOk(paginatedResult(listeners, len(listeners)))
 }
 
-// Post creates a new listener
+// Post 创建新监听器。
+// Post creates a new listener.
 func (c *ListenerController) Post() {
 	db := models.GetDB()
 	if db == nil {
@@ -72,7 +77,8 @@ func (c *ListenerController) Post() {
 	c.JSONOk(listener)
 }
 
-// Put updates a listener
+// Put 更新监听器。
+// Put updates a listener.
 func (c *ListenerController) Put() {
 	id, _ := c.GetInt64("id")
 	db := models.GetDB()
@@ -108,7 +114,8 @@ func (c *ListenerController) Put() {
 	c.JSONOk(listener)
 }
 
-// Delete removes a listener
+// Delete 删除监听器。
+// Delete removes a listener.
 func (c *ListenerController) Delete() {
 	id, _ := c.GetInt64("id")
 	db := models.GetDB()
@@ -121,7 +128,8 @@ func (c *ListenerController) Delete() {
 	c.JSONOk(map[string]interface{}{"deleted_id": id})
 }
 
-// Start activates a listener via the C2 engine
+// Start 通过 C2 引擎启动监听器。
+// Start activates a listener via the C2 engine.
 func (c *ListenerController) Start() {
 	id, _ := c.GetInt64("id")
 	db := models.GetDB()
@@ -160,7 +168,8 @@ func (c *ListenerController) Start() {
 	c.JSONOk(map[string]interface{}{"started_id": id, "status": "activated"})
 }
 
-// Stop deactivates a listener's C2 routes
+// Stop 停用监听器的 C2 路由。
+// Stop deactivates a listener's C2 routes.
 func (c *ListenerController) Stop() {
 	id, _ := c.GetInt64("id")
 
@@ -176,7 +185,8 @@ func (c *ListenerController) Stop() {
 	c.JSONOk(map[string]interface{}{"stopped_id": id, "status": "deactivated"})
 }
 
-// RegisterListenerC2 registers the C2 endpoints for a listener
+// RegisterListenerC2 为监听器注册 C2 端点。
+// RegisterListenerC2 registers the C2 endpoints for a listener.
 func RegisterListenerC2(listener *models.Listener) {
 	key := listener.VerifyKey
 	if key == "" {
@@ -190,17 +200,20 @@ func RegisterListenerC2(listener *models.Listener) {
 // Frontend calls: POST /api/listener/{action} with JSON body
 // ============================================================================
 
-// Add creates a new listener (alias for Post, matches /api/listener/add)
+// Add 创建新监听器（Post 的别名，对应 /api/listener/add）。
+// Add creates a new listener (alias for Post, matches /api/listener/add).
 func (c *ListenerController) Add() {
 	c.Post()
 }
 
-// Edit updates a listener (alias for Put, matches /api/listener/edit)
+// Edit 更新监听器（Put 的别名，对应 /api/listener/edit）。
+// Edit updates a listener (alias for Put, matches /api/listener/edit).
 func (c *ListenerController) Edit() {
 	c.Put()
 }
 
-// EditRemark updates only the remark/note field (matches /api/listener/editremark)
+// EditRemark 仅更新备注字段（对应 /api/listener/editremark）。
+// EditRemark updates only the remark/note field (matches /api/listener/editremark).
 func (c *ListenerController) EditRemark() {
 	id, _ := c.GetInt64("id")
 	remark := c.GetString("remark")
@@ -222,16 +235,20 @@ func (c *ListenerController) EditRemark() {
 	c.JSONOk(listener)
 }
 
-// Del deletes a single listener (alias for Delete, matches /api/listener/del)
+// Del 删除单个监听器（Delete 的别名，对应 /api/listener/del）。
+// Del deletes a single listener (alias for Delete, matches /api/listener/del).
 func (c *ListenerController) Del() {
 	c.Delete()
 }
 
+// DelList 是原版二进制批量删除的方法名（nTApp6jPzv.(*ListenerController).DelList）；
+// Dellist 为路由别名。
 // DelList is the original binary's method name for batch delete
 // (nTApp6jPzv.(*ListenerController).DelList); Dellist is the router alias.
 func (c *ListenerController) DelList() { c.Dellist() }
 
-// Dellist deletes multiple listeners by ID list (matches /api/listener/dellist)
+// Dellist 按 ID 列表批量删除监听器（对应 /api/listener/dellist）。
+// Dellist deletes multiple listeners by ID list (matches /api/listener/dellist).
 func (c *ListenerController) Dellist() {
 	ids := c.GetStrings("ids")
 	db := models.GetDB()
@@ -252,7 +269,8 @@ func (c *ListenerController) Dellist() {
 	c.JSONOk(map[string]interface{}{"deleted": deleted})
 }
 
-// List returns paginated listener list (matches /api/listener/list)
+// List 返回分页监听器列表（对应 /api/listener/list）。
+// List returns paginated listener list (matches /api/listener/list).
 func (c *ListenerController) List() {
 	c.Get()
 }

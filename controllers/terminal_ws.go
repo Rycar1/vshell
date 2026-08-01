@@ -14,7 +14,8 @@ import (
 	"unicode/utf8"
 )
 
-// TerminalSession represents an interactive terminal session with a client
+// TerminalSession 表示与客户端的一个交互式终端会话。
+// TerminalSession represents an interactive terminal session with a client.
 type TerminalSession struct {
 	ID          string    `json:"id"`
 	ClientID    int64     `json:"client_id"`
@@ -39,7 +40,8 @@ var (
 	terminalIDSeq    int64
 )
 
-// NewTerminalSession creates a new terminal session
+// NewTerminalSession 创建新的终端会话。
+// NewTerminalSession creates a new terminal session.
 func NewTerminalSession(clientID int64, termType string, rows, cols int) (*TerminalSession, error) {
 	terminalMu.Lock()
 	terminalIDSeq++
@@ -154,7 +156,8 @@ func (ts *TerminalSession) collectOutput(reader io.Reader, isError bool) {
 	close(ts.done)
 }
 
-// Write sends input to the terminal
+// Write 向终端发送输入。
+// Write sends input to the terminal.
 func (ts *TerminalSession) Write(data []byte) (int, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -162,7 +165,8 @@ func (ts *TerminalSession) Write(data []byte) (int, error) {
 	return ts.stdin.Write(data)
 }
 
-// Resize adjusts the terminal size
+// Resize 调整终端尺寸。
+// Resize adjusts the terminal size.
 func (ts *TerminalSession) Resize(rows, cols int) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -176,14 +180,16 @@ func (ts *TerminalSession) Resize(rows, cols int) {
 	)
 }
 
-// ReadOutput reads all accumulated output
+// ReadOutput 读取累计的输出。
+// ReadOutput reads all accumulated output.
 func (ts *TerminalSession) ReadOutput() string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	return ts.output.String()
 }
 
-// Close terminates the terminal session
+// Close 终止终端会话。
+// Close terminates the terminal session.
 func (ts *TerminalSession) Close() error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -209,14 +215,16 @@ func (ts *TerminalSession) Close() error {
 	return nil
 }
 
-// GetTerminalSession retrieves a terminal session
+// GetTerminalSession 获取终端会话。
+// GetTerminalSession retrieves a terminal session.
 func GetTerminalSession(id string) *TerminalSession {
 	terminalMu.RLock()
 	defer terminalMu.RUnlock()
 	return terminalSessions[id]
 }
 
-// CleanupStaleTerminals removes terminals that have been idle too long
+// CleanupStaleTerminals 移除空闲过久的终端会话。
+// CleanupStaleTerminals removes terminals that have been idle too long.
 func CleanupStaleTerminals(maxIdle time.Duration) {
 	terminalMu.Lock()
 	defer terminalMu.Unlock()
@@ -236,12 +244,14 @@ func CleanupStaleTerminals(maxIdle time.Duration) {
 	}
 }
 
-// TerminalAPI handles terminal WebSocket upgrade and HTTP fallback
+// TerminalAPI 处理终端 WebSocket 升级与 HTTP 回退。
+// TerminalAPI handles terminal WebSocket upgrade and HTTP fallback.
 type TerminalAPI struct {
 	BaseController
 }
 
-// Create creates a new terminal session (HTTP API)
+// Create 创建新终端会话（HTTP API）。
+// Create creates a new terminal session (HTTP API).
 func (t *TerminalAPI) Create() {
 	clientID, _ := t.GetInt64("client_id")
 	termType := t.GetString("type", "cmd")
@@ -263,7 +273,8 @@ func (t *TerminalAPI) Create() {
 	})
 }
 
-// SendInput sends input to a terminal session
+// SendInput 向终端会话发送输入。
+// SendInput sends input to a terminal session.
 func (t *TerminalAPI) SendInput() {
 	sessionID := t.GetString("session_id")
 	input := t.GetString("input")
@@ -283,7 +294,8 @@ func (t *TerminalAPI) SendInput() {
 	t.JSONOk(map[string]interface{}{"sent": len(input)})
 }
 
-// GetOutput retrieves accumulated terminal output
+// GetOutput 获取累计的终端输出。
+// GetOutput retrieves accumulated terminal output.
 func (t *TerminalAPI) GetOutput() {
 	sessionID := t.GetString("session_id")
 	session := GetTerminalSession(sessionID)
@@ -297,7 +309,8 @@ func (t *TerminalAPI) GetOutput() {
 	})
 }
 
-// CloseSession closes a terminal session
+// CloseSession 关闭终端会话。
+// CloseSession closes a terminal session.
 func (t *TerminalAPI) CloseSession() {
 	sessionID := t.GetString("session_id")
 	session := GetTerminalSession(sessionID)
@@ -310,7 +323,8 @@ func (t *TerminalAPI) CloseSession() {
 	t.JSONOk(map[string]string{"status": "closed"})
 }
 
-// WSHandler handles WebSocket terminal connections
+// WSHandler 处理 WebSocket 终端连接。
+// WSHandler handles WebSocket terminal connections.
 func (t *TerminalAPI) WSHandler() {
 	// Simplified: HTTP fallback for terminal interaction
 	// Full WebSocket would use gorilla/websocket
@@ -345,7 +359,8 @@ func (t *TerminalAPI) WSHandler() {
 	}
 }
 
-// ListTerminalSessions returns all active terminal sessions
+// ListTerminalSessions 返回所有活跃终端会话。
+// ListTerminalSessions returns all active terminal sessions.
 func ListTerminalSessions() []map[string]interface{} {
 	terminalMu.RLock()
 	defer terminalMu.RUnlock()
@@ -368,7 +383,8 @@ func ListTerminalSessions() []map[string]interface{} {
 	return result
 }
 
-// TerminalCommand executes a one-shot command and returns the result
+// TerminalCommand 执行一次性命令并返回结果。
+// TerminalCommand executes a one-shot command and returns the result.
 func TerminalCommand(clientID int64, command string, timeout int) (string, error) {
 	var shell, shellFlag string
 	if runtime.GOOS == "windows" {

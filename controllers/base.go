@@ -1,3 +1,8 @@
+// Package controllers 实现 Web 管理面板的 MVC 控制器层：请求上下文、参数解析、
+// 会话、JSON 响应以及各业务控制器（客户端/监听器/终端/文件/隧道等）。
+// Package controllers implements the MVC controller layer of the web management
+// panel: request context, parameter parsing, sessions, JSON responses, and the
+// business controllers (clients/listeners/terminal/files/tunnels, etc.).
 package controllers
 
 import (
@@ -14,7 +19,8 @@ import (
 	"github.com/gorilla/sessions"
 )
 
-// ControllerInterface defines the standard controller methods
+// ControllerInterface 定义标准控制器方法集合。
+// ControllerInterface defines the standard controller methods.
 type ControllerInterface interface {
 	Init(ctx *Context)
 	Prepare()
@@ -27,7 +33,8 @@ type ControllerInterface interface {
 	Options()
 }
 
-// ActionHandler dispatches to a named action method on a controller
+// ActionHandler 将请求分发到控制器上指定名称的 action 方法。
+// ActionHandler dispatches to a named action method on a controller.
 type ActionHandler struct {
 	Ctrl   ControllerInterface
 	Action string
@@ -182,10 +189,15 @@ func (ah *ActionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// SessionControllerInterface wraps sessionController to implement ControllerInterface
+// SessionControllerInterface 包装 sessionController 以符合 ControllerInterface。
+// SessionControllerInterface wraps sessionController to implement ControllerInterface.
 type SessionControllerInterface struct {
 	sessionController
 }
+
+// BaseController 是所有控制器的基类：提供参数读取、会话与 JSON 响应等通用能力。
+// BaseController is the base class of all controllers: provides parameter
+// reading, sessions, and JSON responses.
 type BaseController struct {
 	Ctx     *Context
 	Data    map[interface{}]interface{}
@@ -194,7 +206,8 @@ type BaseController struct {
 	mu      sync.RWMutex
 }
 
-// Context holds the request context
+// Context 保存一次 HTTP 请求的上下文（请求与响应对象）。
+// Context holds the request context.
 type Context struct {
 	Request       *http.Request
 	ResponseWriter http.ResponseWriter
@@ -207,13 +220,18 @@ func (ctx *Context) Write(p []byte) (n int, err error) {
 	return ctx.ResponseWriter.Write(p)
 }
 
-// Init initializes the controller
+// Init 初始化控制器：绑定上下文并准备数据/会话存储。
+// Init initializes the controller.
 func (c *BaseController) Init(ctx *Context) {
 	c.Ctx = ctx
 	c.Data = make(map[interface{}]interface{})
 	c.store = sessions.NewCookieStore([]byte("vshell-session-key"))
 }
 
+// GetString 返回字符串参数。查找顺序与原版 beego 二进制一致：
+// 1) URL 查询参数；2) 表单值；3) JSON 请求体。
+// 每种来源都会同时尝试原始键与其 PascalCase 变体（vkey→Vkey、listen_addr→ListenAddr 等），
+// 因为原版前端以 Go 字段名作为 JSON 键提交。
 // GetString returns a string parameter value.
 // Lookup order matches the original beego-based binary:
 //  1. URL query string
@@ -249,6 +267,7 @@ func (c *BaseController) GetString(key string, defaultValue ...string) string {
 	return val
 }
 
+// jsonBodyValue 从 JSON 请求体中读取键值（按请求缓存）。支持标量值与简单 map 结构。
 // jsonBodyValue reads a key from a JSON request body (cached per request).
 // Both scalar values and simple map[string]interface{} bodies are supported.
 func jsonBodyValue(r *http.Request, key string) string {
@@ -276,6 +295,7 @@ func jsonBodyValue(r *http.Request, key string) string {
 	}
 }
 
+// jsonBodyCache 每个请求只解析一次 JSON 请求体。
 // jsonBodyCache parses the request JSON body once per request.
 func jsonBodyCache(r *http.Request) map[string]interface{} {
 	if v, ok := r.Body.(*bodyJSONCache); ok {
@@ -294,6 +314,7 @@ func jsonBodyCache(r *http.Request) map[string]interface{} {
 	return cache.m
 }
 
+// bodyJSONCache 包装请求体：缓存解码后的 JSON map，同时保留原始字节供后续读取。
 // bodyJSONCache wraps a request body: it caches the decoded JSON map while
 // keeping the raw bytes readable for later consumers.
 type bodyJSONCache struct {
@@ -313,6 +334,7 @@ func (c *bodyJSONCache) Read(p []byte) (int, error) {
 
 func (c *bodyJSONCache) Close() error { return nil }
 
+// pascalKey 将 snake_case 键转换为 PascalCase 变体（vkey→Vkey、listen_addr→ListenAddr 等）。
 // pascalKey converts a snake_case form key into its PascalCase variant
 // (vkey → Vkey, listen_addr → ListenAddr, encrypt_salt → EncryptSalt).
 func pascalKey(key string) string {
@@ -327,12 +349,14 @@ func pascalKey(key string) string {
 	return out
 }
 
-// GetStrings returns multiple string values for a key
+// GetStrings 返回某键的多个字符串值。
+// GetStrings returns multiple string values for a key.
 func (c *BaseController) GetStrings(key string) []string {
 	return c.Ctx.Request.URL.Query()[key]
 }
 
-// GetInt returns an int parameter
+// GetInt 返回 int 参数。
+// GetInt returns an int parameter.
 func (c *BaseController) GetInt(key string, defaultValue ...int) (int, error) {
 	val := c.GetString(key)
 	if val == "" {
@@ -344,7 +368,8 @@ func (c *BaseController) GetInt(key string, defaultValue ...int) (int, error) {
 	return strconv.Atoi(val)
 }
 
-// GetInt64 returns an int64 parameter
+// GetInt64 返回 int64 参数。
+// GetInt64 returns an int64 parameter.
 func (c *BaseController) GetInt64(key string, defaultValue ...int64) (int64, error) {
 	val := c.GetString(key)
 	if val == "" {
@@ -356,7 +381,8 @@ func (c *BaseController) GetInt64(key string, defaultValue ...int64) (int64, err
 	return strconv.ParseInt(val, 10, 64)
 }
 
-// GetUint32 returns a uint32 parameter
+// GetUint32 返回 uint32 参数。
+// GetUint32 returns a uint32 parameter.
 func (c *BaseController) GetUint32(key string, defaultValue ...uint32) (uint32, error) {
 	n, err := c.GetInt64(key)
 	if err != nil {
@@ -368,7 +394,8 @@ func (c *BaseController) GetUint32(key string, defaultValue ...uint32) (uint32, 
 	return uint32(n), nil
 }
 
-// GetBool returns a bool parameter
+// GetBool 返回 bool 参数。
+// GetBool returns a bool parameter.
 func (c *BaseController) GetBool(key string, defaultValue ...bool) (bool, error) {
 	val := c.GetString(key)
 	if val == "" {
@@ -380,7 +407,8 @@ func (c *BaseController) GetBool(key string, defaultValue ...bool) (bool, error)
 	return strconv.ParseBool(val)
 }
 
-// GetFloat returns a float64 parameter
+// GetFloat 返回 float64 参数。
+// GetFloat returns a float64 parameter.
 func (c *BaseController) GetFloat(key string, defaultValue ...float64) (float64, error) {
 	val := c.GetString(key)
 	if val == "" {
@@ -392,7 +420,8 @@ func (c *BaseController) GetFloat(key string, defaultValue ...float64) (float64,
 	return strconv.ParseFloat(val, 64)
 }
 
-// SetSession sets a session value
+// SetSession 写入会话值。
+// SetSession sets a session value.
 func (c *BaseController) SetSession(key interface{}, val interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -404,7 +433,8 @@ func (c *BaseController) SetSession(key interface{}, val interface{}) {
 	c.session.Values[key] = val
 }
 
-// GetSession gets a session value
+// GetSession 读取会话值。
+// GetSession gets a session value.
 func (c *BaseController) GetSession(key interface{}) interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -414,7 +444,8 @@ func (c *BaseController) GetSession(key interface{}) interface{} {
 	return c.session.Values[key]
 }
 
-// DelSession deletes a session value
+// DelSession 删除会话值。
+// DelSession deletes a session value.
 func (c *BaseController) DelSession(key interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -423,19 +454,22 @@ func (c *BaseController) DelSession(key interface{}) {
 	}
 }
 
-// StartSession initializes the session
+// StartSession 初始化会话。
+// StartSession initializes the session.
 func (c *BaseController) StartSession() {
 	c.session = sessions.NewSession(c.store, "vshell-session")
 }
 
-// DestroySession clears the session
+// DestroySession 清空会话。
+// DestroySession clears the session.
 func (c *BaseController) DestroySession() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.session = nil
 }
 
-// SetSecureCookie sets an encrypted cookie
+// SetSecureCookie 写入加密 Cookie（24 小时有效）。
+// SetSecureCookie sets an encrypted cookie.
 func (c *BaseController) SetSecureCookie(secret string, name string, value string) {
 	http.SetCookie(c.Ctx.ResponseWriter, &http.Cookie{
 		Name:     name,
@@ -447,7 +481,8 @@ func (c *BaseController) SetSecureCookie(secret string, name string, value strin
 	})
 }
 
-// GetSecureCookie gets an encrypted cookie
+// GetSecureCookie 读取加密 Cookie。
+// GetSecureCookie gets an encrypted cookie.
 func (c *BaseController) GetSecureCookie(secret string, name string) string {
 	cookie, err := c.Ctx.Request.Cookie(name)
 	if err != nil {
@@ -460,7 +495,8 @@ func (c *BaseController) GetSecureCookie(secret string, name string) string {
 	return val
 }
 
-// Render renders a template
+// Render 渲染服务端模板。
+// Render renders a template.
 func (c *BaseController) Render(tpl string) {
 	c.Ctx.ResponseWriter.Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.Ctx.ResponseWriter.WriteHeader(http.StatusOK)
@@ -472,14 +508,16 @@ func (c *BaseController) Render(tpl string) {
 	t.Execute(c.Ctx.ResponseWriter, c.Data)
 }
 
-// JSON sends a JSON response
+// JSON 发送 JSON 响应。
+// JSON sends a JSON response.
 func (c *BaseController) JSON(code int, data interface{}) {
 	c.Ctx.ResponseWriter.Header().Set("Content-Type", "application/json; charset=utf-8")
 	c.Ctx.ResponseWriter.WriteHeader(code)
 	json.NewEncoder(c.Ctx.ResponseWriter).Encode(data)
 }
 
-// JSONOk sends a success JSON response (original binary format)
+// JSONOk 发送成功响应（原版二进制格式：code=0/message=ok/type=success）。
+// JSONOk sends a success JSON response (original binary format).
 func (c *BaseController) JSONOk(data interface{}) {
 	c.JSON(200, map[string]interface{}{
 		"code":    0,
@@ -489,7 +527,8 @@ func (c *BaseController) JSONOk(data interface{}) {
 	})
 }
 
-// JSONOkMessage sends a success response with just a message (no result data)
+// JSONOkMessage 发送仅含 message 的成功响应。
+// JSONOkMessage sends a success response with just a message (no result data).
 func (c *BaseController) JSONOkMessage(message string) {
 	c.JSON(200, map[string]interface{}{
 		"code":    0,
@@ -498,6 +537,7 @@ func (c *BaseController) JSONOkMessage(message string) {
 	})
 }
 
+// JSONErr 发送错误响应，格式与原版一致：{"code":-1,"message":msg,"result":null,"type":"error"}
 // JSONErr sends an error JSON response matching the original binary:
 // {"code":-1,"message":msg,"result":null,"type":"error"}
 func (c *BaseController) JSONErr(message string) {
@@ -509,33 +549,39 @@ func (c *BaseController) JSONErr(message string) {
 	})
 }
 
-// Error is an alias for JSONErr
+// Error 是 JSONErr 的别名。
+// Error is an alias for JSONErr.
 func (c *BaseController) Error(message string) {
 	c.JSONErr(message)
 }
 
-// Redirect redirects to a URL
+// Redirect 重定向到指定 URL。
+// Redirect redirects to a URL.
 func (c *BaseController) Redirect(url string, code int) {
 	http.Redirect(c.Ctx.ResponseWriter, c.Ctx.Request, url, code)
 }
 
-// CustomAbort aborts with a custom error
+// CustomAbort 以自定义状态码与内容终止请求。
+// CustomAbort aborts with a custom error.
 func (c *BaseController) CustomAbort(status int, body string) {
 	c.Ctx.ResponseWriter.WriteHeader(status)
 	c.Ctx.ResponseWriter.Write([]byte(body))
 }
 
-// Abort aborts with 404
+// Abort 以 404 终止请求。
+// Abort aborts with 404.
 func (c *BaseController) Abort(body string) {
 	c.CustomAbort(http.StatusNotFound, body)
 }
 
-// ServeJSON serves JSON content
+// ServeJSON 输出 JSON 内容。
+// ServeJSON serves JSON content.
 func (c *BaseController) ServeJSON(data interface{}) {
 	c.JSON(200, data)
 }
 
-// ServeJSONP serves JSONP content
+// ServeJSONP 输出 JSONP 内容。
+// ServeJSONP serves JSONP content.
 func (c *BaseController) ServeJSONP(data interface{}) {
 	callback := c.GetString("callback", "callback")
 	c.Ctx.ResponseWriter.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -544,14 +590,16 @@ func (c *BaseController) ServeJSONP(data interface{}) {
 	c.Ctx.ResponseWriter.Write([]byte(")"))
 }
 
-// ServeXML serves XML content
+// ServeXML 输出 XML 内容。
+// ServeXML serves XML content.
 func (c *BaseController) ServeXML(data interface{}) {
 	c.Ctx.ResponseWriter.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	// Simplified - would need xml.Marshal
 	json.NewEncoder(c.Ctx.ResponseWriter).Encode(data)
 }
 
-// ServeFormatted serves formatted content based on request Accept header
+// ServeFormatted 根据 Accept 头输出格式化内容。
+// ServeFormatted serves formatted content based on request Accept header.
 func (c *BaseController) ServeFormatted(data interface{}) {
 	accept := c.Ctx.Request.Header.Get("Accept")
 	if strings.Contains(accept, "application/json") || strings.Contains(accept, "text/json") {
@@ -561,38 +609,45 @@ func (c *BaseController) ServeFormatted(data interface{}) {
 	}
 }
 
-// IsAjax checks if request is AJAX
+// IsAjax 判断请求是否为 AJAX。
+// IsAjax checks if request is AJAX.
 func (c *BaseController) IsAjax() bool {
 	return c.Ctx.Request.Header.Get("X-Requested-With") == "XMLHttpRequest"
 }
 
-// Input returns parsed form values
+// Input 返回解析后的表单值。
+// Input returns parsed form values.
 func (c *BaseController) Input() url.Values {
 	c.Ctx.Request.ParseForm()
 	return c.Ctx.Request.Form
 }
 
-// ParseForm parses the form
+// ParseForm 解析表单（当前为空实现，兼容原版接口）。
+// ParseForm parses the form (currently a no-op for interface compatibility).
 func (c *BaseController) ParseForm(obj interface{}) error {
 	return nil
 }
 
-// GetFile retrieves an uploaded file
+// GetFile 获取上传的文件。
+// GetFile retrieves an uploaded file.
 func (c *BaseController) GetFile(key string) (multipart.File, *multipart.FileHeader, error) {
 	return c.Ctx.Request.FormFile(key)
 }
 
-// GetFiles retrieves multiple uploaded files
+// GetFiles 获取多个上传文件（当前返回 nil，兼容接口）。
+// GetFiles retrieves multiple uploaded files (currently unimplemented).
 func (c *BaseController) GetFiles(key string) ([]*multipart.FileHeader, error) {
 	return nil, nil
 }
 
-// SaveToFile saves an uploaded file to disk
+// SaveToFile 将上传文件保存到磁盘（当前为空实现）。
+// SaveToFile saves an uploaded file to disk (currently a no-op).
 func (c *BaseController) SaveToFile(file string, path string) error {
 	return nil
 }
 
-// GetControllerAndAction returns the controller name and action
+// GetControllerAndAction 从 URL 中解析控制器名与 action 名。
+// GetControllerAndAction returns the controller name and action.
 func (c *BaseController) GetControllerAndAction() (string, string) {
 	path := c.Ctx.Request.URL.Path
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -602,22 +657,26 @@ func (c *BaseController) GetControllerAndAction() (string, string) {
 	return "index", "index"
 }
 
-// URLFor generates a URL for a controller/action
+// URLFor 为控制器/action 生成 URL。
+// URLFor generates a URL for a controller/action.
 func (c *BaseController) URLFor(controller string, action string, params ...interface{}) string {
 	return "/" + controller + "/" + strings.ToLower(action)
 }
 
-// URLMapping returns URL mappings
+// URLMapping 返回 URL 映射表（当前为空）。
+// URLMapping returns URL mappings (currently empty).
 func (c *BaseController) URLMapping() map[string]string {
 	return map[string]string{}
 }
 
-// Mapping registers URL mappings
+// Mapping 注册 URL 映射（占位实现）。
+// Mapping registers URL mappings (placeholder).
 func (c *BaseController) Mapping(method string, action string, handler func()) {
 	// Placeholder for URL routing
 }
 
-// HandlerFunc returns a handler function
+// HandlerFunc 返回绑定到当前控制器的处理函数。
+// HandlerFunc returns a handler function.
 func (c *BaseController) HandlerFunc() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c.Ctx = &Context{
@@ -627,57 +686,72 @@ func (c *BaseController) HandlerFunc() http.HandlerFunc {
 	}
 }
 
-// ServeYAML serves YAML content
+// ServeYAML 设置 YAML 响应头（兼容接口）。
+// ServeYAML serves YAML content.
 func (c *BaseController) ServeYAML(data interface{}) {
 	c.Ctx.ResponseWriter.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 }
 
-// SessionRegenerateID regenerates the session ID
+// SessionRegenerateID 重新生成会话 ID。
+// SessionRegenerateID regenerates the session ID.
 func (c *BaseController) SessionRegenerateID() {
 	c.StartSession()
 }
 
-// StopRun stops request processing
+// StopRun 终止请求处理。
+// StopRun stops request processing.
 func (c *BaseController) StopRun() {
 	panic("stop run")
 }
 
-// Finish performs cleanup after request
+// Finish 请求结束后执行清理（当前为空实现）。
+// Finish performs cleanup after request (currently a no-op).
 func (c *BaseController) Finish() {}
 
-// Trace logs a trace message
+// Trace 记录追踪日志（当前为空实现）。
+// Trace logs a trace message (currently a no-op).
 func (c *BaseController) Trace(v ...interface{}) {}
 
-// Prepare is the prepare hook - override in subclasses
+// Prepare 是预处理钩子，子类可覆写。
+// Prepare is the prepare hook - override in subclasses.
 func (c *BaseController) Prepare() {}
 
-// Post handles POST requests - override in subclasses
+// Post 处理 POST 请求，子类可覆写。
+// Post handles POST requests - override in subclasses.
 func (c *BaseController) Post() {}
 
-// Get handles GET requests - override in subclasses
+// Get 处理 GET 请求，子类可覆写。
+// Get handles GET requests - override in subclasses.
 func (c *BaseController) Get() {}
 
-// Head handles HEAD requests
+// Head 处理 HEAD 请求。
+// Head handles HEAD requests.
 func (c *BaseController) Head() {}
 
-// Put handles PUT requests
+// Put 处理 PUT 请求。
+// Put handles PUT requests.
 func (c *BaseController) Put() {}
 
-// Patch handles PATCH requests
+// Patch 处理 PATCH 请求。
+// Patch handles PATCH requests.
 func (c *BaseController) Patch() {}
 
-// Delete handles DELETE requests
+// Delete 处理 DELETE 请求。
+// Delete handles DELETE requests.
 func (c *BaseController) Delete() {}
 
-// Options handles OPTIONS requests
+// Options 处理 OPTIONS 请求。
+// Options handles OPTIONS requests.
 func (c *BaseController) Options() {}
 
-// SetData sets template data
+// SetData 设置模板数据。
+// SetData sets template data.
 func (c *BaseController) SetData(key interface{}, val interface{}) {
 	c.Data[key] = val
 }
 
-// InputData parses input data from Content-Type header
+// InputData 根据请求方法解析输入数据（GET 用查询串，其余用表单）。
+// InputData parses input data based on the HTTP method.
 func (c *BaseController) InputData() url.Values {
 	if c.Ctx.Request.Method == "GET" {
 		return c.Ctx.Request.URL.Query()
@@ -690,6 +764,7 @@ func (c *BaseController) InputData() url.Values {
 // Action dispatch helpers (for controllers with many action methods)
 // ============================================================================
 
+// dispatchFileAction 将文件控制器的 action 名称路由到对应方法。
 // dispatchFileAction routes file controller action names to methods.
 func dispatchFileAction(fc *FileController, action string) {
 	switch action {
@@ -712,6 +787,7 @@ func dispatchFileAction(fc *FileController, action string) {
 	}
 }
 
+// dispatchListenerCRUD 将监听器 CRUD action 名称路由到对应方法。
 // dispatchListenerCRUD routes listener CRUD action names to methods.
 func dispatchListenerCRUD(lc *ListenerController, action string) {
 	switch action {
@@ -721,6 +797,8 @@ func dispatchListenerCRUD(lc *ListenerController, action string) {
 	}
 }
 
+// dispatchRunnerAction 将 runner 控制器的 action 名称路由到对应方法。
+// paginatedResult 以前端期望的格式包装分页数据。
 // dispatchRunnerAction routes runner controller action names to methods.
 // paginatedResult wraps items in the format the frontend expects:
 func paginatedResult(items interface{}, total int) map[string]interface{} {

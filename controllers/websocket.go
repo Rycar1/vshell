@@ -30,7 +30,8 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// WSTerminalSession represents a WebSocket-connected terminal session
+// WSTerminalSession 表示一个经 WebSocket 连接的终端会话。
+// WSTerminalSession represents a WebSocket-connected terminal session.
 type WSTerminalSession struct {
 	ID         string          `json:"id"`
 	ClientID   int64           `json:"client_id"`
@@ -62,7 +63,8 @@ var (
 	screenStreamsMu sync.RWMutex
 )
 
-// HandleTerminalWebSocket upgrades an HTTP connection to WebSocket for terminal
+// HandleTerminalWebSocket 将 HTTP 连接升级为终端 WebSocket。
+// HandleTerminalWebSocket upgrades an HTTP connection to WebSocket for terminal.
 func HandleTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -397,7 +399,8 @@ func (ts *WSTerminalSession) cleanup() {
 	}
 }
 
-// ListWSTerminalSessions returns all active WebSocket terminal sessions
+// ListWSTerminalSessions 返回所有活跃的 WebSocket 终端会话。
+// ListWSTerminalSessions returns all active WebSocket terminal sessions.
 func ListWSTerminalSessions() []map[string]interface{} {
 	wsTermMu.RLock()
 	defer wsTermMu.RUnlock()
@@ -424,7 +427,8 @@ func ListWSTerminalSessions() []map[string]interface{} {
 // (reverse-engineered from ScreenController.Ws)
 // ============================================================================
 
-// HandleScreenWebSocket handles remote screen streaming via WebSocket
+// HandleScreenWebSocket 通过 WebSocket 处理远程屏幕流。
+// HandleScreenWebSocket handles remote screen streaming via WebSocket.
 func HandleScreenWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -506,7 +510,8 @@ func HandleScreenWebSocket(w http.ResponseWriter, r *http.Request) {
 // Screen Stream Relay — forwards agent screen frames to viewer WebSocket
 // ============================================================================
 
-// ScreenViewer represents a WebSocket-connected screen viewer
+// ScreenViewer 表示一个经 WebSocket 连接的屏幕查看者。
+// ScreenViewer represents a WebSocket-connected screen viewer.
 type ScreenViewer struct {
 	ClientID  int64           `json:"client_id"`
 	Conn      *websocket.Conn `json:"-"`
@@ -518,7 +523,8 @@ type ScreenViewer struct {
 	done      chan struct{}
 }
 
-// StartScreenStream registers a viewer for screen frame relay
+// StartScreenStream 注册一个屏幕帧中继查看者。
+// StartScreenStream registers a viewer for screen frame relay.
 func StartScreenStream(clientID int64, conn *websocket.Conn, quality, fps int) *ScreenViewer {
 	sv := &ScreenViewer{
 		ClientID:  clientID,
@@ -547,6 +553,8 @@ func StartScreenStream(clientID int64, conn *websocket.Conn, quality, fps int) *
 	return sv
 }
 
+// StopScreenStream 将 sv 从查看者 map 移除——但仅当它仍是 clientID 的当前查看者时。
+// 已被 StartScreenStream 替换连接的过期处理器的延迟清理不得杀掉更新的查看者。
 // StopScreenStream removes sv from the viewer map — but only if it is still the
 // CURRENT viewer for clientID. A stale handler's deferred cleanup (after its
 // conn was replaced by StartScreenStream) must not kill a newer viewer.
@@ -560,6 +568,8 @@ func StopScreenStream(clientID int64, sv *ScreenViewer) {
 	screenStreamsMu.Unlock()
 }
 
+// RelayScreenFrame 将屏幕帧转发给已连接的查看者，由 C2 引擎在收到 Agent 屏幕捕获结果时调用。
+// 原版前端消费原始二进制 JPEG 帧（以二进制 WebSocket 消息发送，而非 JSON 包装）：
 // RelayScreenFrame forwards a screen frame to the connected viewer.
 // Called by the C2 engine when a screen capture result arrives from an agent.
 //
@@ -601,7 +611,8 @@ func RelayScreenFrame(clientID int64, frameData []byte, format string, index int
 	_ = index
 }
 
-// RelayScreenStop notifies the viewer that screen capture has stopped
+// RelayScreenStop 通知查看者屏幕捕获已停止。
+// RelayScreenStop notifies the viewer that screen capture has stopped.
 func RelayScreenStop(clientID int64, reason string) {
 	screenStreamsMu.RLock()
 	sv, ok := screenStreams[clientID]
@@ -645,7 +656,8 @@ func (sv *ScreenViewer) keepalive() {
 	}
 }
 
-// GetScreenViewer returns the screen viewer for a client, if any
+// GetScreenViewer 返回指定客户端的屏幕查看者（若存在）。
+// GetScreenViewer returns the screen viewer for a client, if any.
 func GetScreenViewer(clientID int64) *ScreenViewer {
 	screenStreamsMu.RLock()
 	defer screenStreamsMu.RUnlock()

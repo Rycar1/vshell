@@ -25,9 +25,11 @@ import (
 
 // ============================================================================
 // C2 Listener - HTTP/HTTPS/DNS/WebSocket listener management
+// C2 监听器——HTTP/HTTPS/DNS/WebSocket 监听器管理
 // ============================================================================
 
-// C2Listener manages a single C2 protocol listener
+// C2Listener 管理单个 C2 协议监听器。
+// C2Listener manages a single C2 protocol listener.
 type C2Listener struct {
 	mu        sync.RWMutex
 	ID        int64
@@ -43,7 +45,8 @@ type C2Listener struct {
 	sessions map[string]*AgentSession
 }
 
-// AgentSession tracks an active agent connection
+// AgentSession 跟踪一个活跃的 Agent 连接。
+// AgentSession tracks an active agent connection.
 type AgentSession struct {
 	SessionID   string    `json:"session_id"`
 	ClientID    int64     `json:"client_id"`
@@ -53,7 +56,8 @@ type AgentSession struct {
 	LastSeen    time.Time `json:"last_seen"`
 }
 
-// NewC2Listener creates a new C2 listener from configuration
+// NewC2Listener 根据配置创建新的 C2 监听器。
+// NewC2Listener creates a new C2 listener from configuration.
 func NewC2Listener(config *Listener) *C2Listener {
 	return &C2Listener{
 		ID:       config.ID,
@@ -63,6 +67,7 @@ func NewC2Listener(config *Listener) *C2Listener {
 	}
 }
 
+// GetSessions 返回该监听器活跃 Agent 会话的不可变快照。
 // GetSessions returns immutable snapshots of active agent sessions for this listener.
 func (cl *C2Listener) GetSessions() []*AgentSession {
 	cl.mu.RLock()
@@ -79,7 +84,8 @@ func (cl *C2Listener) GetSessions() []*AgentSession {
 	return result
 }
 
-// Start begins listening for C2 connections
+// Start 开始监听 C2 连接。
+// Start begins listening for C2 connections.
 func (cl *C2Listener) Start() error {
 	cl.mu.Lock()
 
@@ -179,7 +185,8 @@ func (cl *C2Listener) Start() error {
 	return nil
 }
 
-// Stop gracefully stops the C2 listener
+// Stop 优雅停止 C2 监听器。
+// Stop gracefully stops the C2 listener.
 func (cl *C2Listener) Stop() error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -201,7 +208,8 @@ func (cl *C2Listener) Stop() error {
 	return nil
 }
 
-// IsRunning returns whether the listener is active
+// IsRunning 返回监听器是否活跃。
+// IsRunning returns whether the listener is active.
 func (cl *C2Listener) IsRunning() bool {
 	cl.mu.RLock()
 	defer cl.mu.RUnlock()
@@ -702,7 +710,8 @@ var wsUpgrader = websocket.Upgrader{
 	},
 }
 
-// WSMessage represents a WebSocket protocol message
+// WSMessage 表示 WebSocket 协议消息。
+// WSMessage represents a WebSocket protocol message.
 type WSMessage struct {
 	Type      string          `json:"type"` // checkin, poll, result, ping, task, pong, error
 	ClientID  int64           `json:"client_id,omitempty"`
@@ -1096,7 +1105,8 @@ func (cl *C2Listener) generateSelfSignedCert() (*tls.Certificate, error) {
 // Listener manager
 // ============================================================================
 
-// ListenerManager manages all active C2 listeners
+// ListenerManager 管理所有活跃的 C2 监听器。
+// ListenerManager manages all active C2 listeners.
 type ListenerManager struct {
 	mu        sync.RWMutex
 	listeners map[int64]*C2Listener
@@ -1106,12 +1116,14 @@ var listenerMgr = &ListenerManager{
 	listeners: make(map[int64]*C2Listener),
 }
 
-// GetListenerManager returns the global listener manager
+// GetListenerManager 返回全局监听器管理器。
+// GetListenerManager returns the global listener manager.
 func GetListenerManager() *ListenerManager {
 	return listenerMgr
 }
 
-// StartListener creates and starts a C2 listener from configuration
+// StartListener 根据配置创建并启动 C2 监听器。
+// StartListener creates and starts a C2 listener from configuration.
 func (lm *ListenerManager) StartListener(config *Listener) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -1129,7 +1141,8 @@ func (lm *ListenerManager) StartListener(config *Listener) error {
 	return nil
 }
 
-// StopListener stops and removes a C2 listener
+// StopListener 停止并移除 C2 监听器。
+// StopListener stops and removes a C2 listener.
 func (lm *ListenerManager) StopListener(id int64) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -1147,14 +1160,16 @@ func (lm *ListenerManager) StopListener(id int64) error {
 	return nil
 }
 
-// GetListener returns an active C2 listener
+// GetListener 返回活跃的 C2 监听器。
+// GetListener returns an active C2 listener.
 func (lm *ListenerManager) GetListener(id int64) *C2Listener {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 	return lm.listeners[id]
 }
 
-// ListActive returns all active listener IDs
+// ListActive 返回所有活跃监听器 ID。
+// ListActive returns all active listener IDs.
 func (lm *ListenerManager) ListActive() []int64 {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
@@ -1166,7 +1181,8 @@ func (lm *ListenerManager) ListActive() []int64 {
 	return ids
 }
 
-// StopAll stops all active listeners
+// StopAll 停止所有活跃监听器。
+// StopAll stops all active listeners.
 func (lm *ListenerManager) StopAll() {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()

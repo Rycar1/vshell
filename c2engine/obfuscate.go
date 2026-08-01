@@ -8,29 +8,35 @@ import (
 
 // ============================================================================
 // String Obfuscation (equivalent to decFunc in every package)
+// 字符串混淆（对应每个包中的 decFunc）
 // ============================================================================
 //
 // The original binary uses a per-package decFunc type that decodes
+// 原版二进制在每个包中使用 decFunc 类型的解码函数，
 // obfuscated string literals. Each encoded string is stored as:
 //   struct { data *[]uint8; seed *uint8; fnc *decFunc }
 //
 // The standard encoding is XOR with a single seed byte.
 
-// DecFunc is the type of the string decode function
+// DecFunc 是字符串解码函数的类型。
+// DecFunc is the type of the string decode function.
 type DecFunc func(data []byte, seed byte) string
 
-// ObfuscatedString represents an encoded string literal
+// ObfuscatedString 表示一个编码后的字符串字面量。
+// ObfuscatedString represents an encoded string literal.
 type ObfuscatedString struct {
 	Data []byte
 	Seed byte
 }
 
-// String decodes and returns the plaintext
+// String 解码并返回明文。
+// String decodes and returns the plaintext.
 func (os ObfuscatedString) String() string {
 	return DefaultDecode(os.Data, os.Seed)
 }
 
-// DefaultDecode decodes an XOR-obfuscated string with a seed byte
+// DefaultDecode 使用种子字节解码 XOR 混淆字符串。
+// DefaultDecode decodes an XOR-obfuscated string with a seed byte.
 func DefaultDecode(data []byte, seed byte) string {
 	result := make([]byte, len(data))
 	for i, b := range data {
@@ -39,7 +45,8 @@ func DefaultDecode(data []byte, seed byte) string {
 	return string(result)
 }
 
-// NewObfuscatedString creates an obfuscated string
+// NewObfuscatedString 创建混淆字符串。
+// NewObfuscatedString creates an obfuscated string.
 func NewObfuscatedString(plaintext string, seed byte) ObfuscatedString {
 	data := make([]byte, len(plaintext))
 	for i := 0; i < len(plaintext); i++ {
@@ -48,7 +55,8 @@ func NewObfuscatedString(plaintext string, seed byte) ObfuscatedString {
 	return ObfuscatedString{Data: data, Seed: seed}
 }
 
-// EncodeString creates an obfuscated representation of a string
+// EncodeString 生成字符串的混淆表示。
+// EncodeString creates an obfuscated representation of a string.
 func EncodeString(plaintext string, seed byte) []byte {
 	data := make([]byte, len(plaintext))
 	for i := 0; i < len(plaintext); i++ {
@@ -57,7 +65,8 @@ func EncodeString(plaintext string, seed byte) []byte {
 	return data
 }
 
-// DecodeString decodes an XOR-obfuscated byte slice
+// DecodeString 解码 XOR 混淆的字节切片。
+// DecodeString decodes an XOR-obfuscated byte slice.
 func DecodeString(data []byte, seed byte) string {
 	return DefaultDecode(data, seed)
 }
@@ -66,10 +75,12 @@ func DecodeString(data []byte, seed byte) string {
 // 5-Character Encoding Scheme (reverse-engineered)
 // ============================================================================
 //
+// 原版 vshell 对特定字符串使用自定义 5 字符编码，用 5 字节密钥循环作用于数据。
 // The original vshell uses a custom 5-character encoding for certain strings.
 // This encoding uses a 5-byte key repeated over the data.
 
-// FiveCharDecode decodes strings using the 5-character key scheme
+// FiveCharDecode 使用 5 字符密钥方案解码字符串。
+// FiveCharDecode decodes strings using the 5-character key scheme.
 func FiveCharDecode(data []byte, key [5]byte) string {
 	result := make([]byte, len(data))
 	for i, b := range data {
@@ -78,7 +89,8 @@ func FiveCharDecode(data []byte, key [5]byte) string {
 	return string(result)
 }
 
-// FiveCharEncode encodes a string using the 5-character key scheme
+// FiveCharEncode 使用 5 字符密钥方案编码字符串。
+// FiveCharEncode encodes a string using the 5-character key scheme.
 func FiveCharEncode(plaintext string, key [5]byte) []byte {
 	data := make([]byte, len(plaintext))
 	for i := 0; i < len(plaintext); i++ {
@@ -91,12 +103,14 @@ func FiveCharEncode(plaintext string, key [5]byte) []byte {
 // Hex encoding helpers (for display/storage)
 // ============================================================================
 
-// HexEncode encodes bytes to hex string
+// HexEncode 将字节编码为十六进制字符串。
+// HexEncode encodes bytes to hex string.
 func HexEncode(data []byte) string {
 	return hex.EncodeToString(data)
 }
 
-// HexDecode decodes hex string to bytes
+// HexDecode 将十六进制字符串解码为字节。
+// HexDecode decodes hex string to bytes.
 func HexDecode(s string) ([]byte, error) {
 	return hex.DecodeString(s)
 }

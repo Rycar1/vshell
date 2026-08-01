@@ -390,7 +390,8 @@ func (e *Engine) DelListener(id int64) error {
 // Tunnel management
 // ============================================================================
 
-// NewTunnel creates a new tunnel
+// NewTunnel 创建新隧道。
+// NewTunnel creates a new tunnel.
 func (e *Engine) NewTunnel(clientID int64, port int, mode, targetAddr string) (*Tunnel, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -412,14 +413,16 @@ func (e *Engine) NewTunnel(clientID int64, port int, mode, targetAddr string) (*
 	return t, nil
 }
 
-// GetTunnel retrieves a tunnel by ID
+// GetTunnel 按 ID 获取隧道。
+// GetTunnel retrieves a tunnel by ID.
 func (e *Engine) GetTunnel(id int64) *Tunnel {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.tunnels[id]
 }
 
-// GetTunnelList returns all tunnels as a slice
+// GetTunnelList 返回全部隧道的切片。
+// GetTunnelList returns all tunnels as a slice.
 func (e *Engine) GetTunnelList() []*Tunnel {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -455,7 +458,8 @@ func (e *Engine) DelTunnel(id int64) error {
 // Host management
 // ============================================================================
 
-// NewHost creates a new reverse proxy host
+// NewHost 创建新的反向代理 Host。
+// NewHost creates a new reverse proxy host.
 func (e *Engine) NewHost(clientID int64, host, targetStr, scheme string) (*Host, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -472,14 +476,16 @@ func (e *Engine) NewHost(clientID int64, host, targetStr, scheme string) (*Host,
 	return h, nil
 }
 
-// GetHost retrieves a host by ID
+// GetHost 按 ID 获取 Host。
+// GetHost retrieves a host by ID.
 func (e *Engine) GetHost(id int64) *Host {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.hosts[id]
 }
 
-// DelHost removes a host
+// DelHost 删除 Host。
+// DelHost removes a host.
 func (e *Engine) DelHost(id int64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -498,7 +504,8 @@ func (e *Engine) DelHost(id int64) error {
 	return nil
 }
 
-// GetHostList returns all hosts as a slice
+// GetHostList 返回全部 Host 的切片。
+// GetHostList returns all hosts as a slice.
 func (e *Engine) GetHostList() []*Host {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -510,7 +517,8 @@ func (e *Engine) GetHostList() []*Host {
 	return result
 }
 
-// UpdateHost updates an existing host's configuration
+// UpdateHost 更新现有 Host 的配置。
+// UpdateHost updates an existing host's configuration.
 func (e *Engine) UpdateHost(id int64, updates map[string]interface{}) (*Host, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -538,6 +546,7 @@ func (e *Engine) UpdateHost(id int64, updates map[string]interface{}) (*Host, er
 // Task management
 // ============================================================================
 
+// NewTask 为客户端创建新的命令任务。
 // NewTask creates a new command task for a client.
 // Original binary: eSxbx2zKVifD.(*C7cMcwDVYi_).NewTask — the engine-level
 // task factory used by the task dispatch pipeline.
@@ -545,6 +554,7 @@ func (e *Engine) NewTask(clientID int64, command string, timeout int) (*Task, er
 	return e.CreateTask(clientID, command, timeout)
 }
 
+// GetTask 按 ID 获取任务。
 // GetTask retrieves a task by ID.
 // Original binary: eSxbx2zKVifD.(*C7cMcwDVYi_).GetTask.
 func (e *Engine) GetTask(id int64) *Task {
@@ -553,6 +563,7 @@ func (e *Engine) GetTask(id int64) *Task {
 	return e.tasks[id]
 }
 
+// DelTask 按 ID 删除任务。
 // DelTask removes a task by ID.
 // Original binary: eSxbx2zKVifD.(*C7cMcwDVYi_).DelTask.
 func (e *Engine) DelTask(id int64) error {
@@ -566,7 +577,8 @@ func (e *Engine) DelTask(id int64) error {
 	return nil
 }
 
-// CreateTask creates a new command task for a client
+// CreateTask 为客户端创建新的命令任务。
+// CreateTask creates a new command task for a client.
 func (e *Engine) CreateTask(clientID int64, command string, timeout int) (*Task, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -591,7 +603,8 @@ func (e *Engine) CreateTask(clientID int64, command string, timeout int) (*Task,
 	return task, nil
 }
 
-// UpdateTask updates a task's status and result
+// UpdateTask 更新任务的状态与结果。
+// UpdateTask updates a task's status and result.
 func (e *Engine) UpdateTask(id int64, result, status string) error {
 	e.mu.Lock()
 
@@ -615,7 +628,8 @@ func (e *Engine) UpdateTask(id int64, result, status string) error {
 	return nil
 }
 
-// SetTaskCompleteHook registers a callback invoked (outside the engine lock)
+// SetTaskCompleteHook 注册任务完成回调（在引擎锁外调用）。
+// SetTaskCompleteHook registers a callback invoked (outside the engine lock).
 // whenever a task is updated to a terminal state. Registered by controllers,
 // e.g. to persist files pulled from agents via the download command.
 func SetTaskCompleteHook(f func(commandID int64, result, status string)) {

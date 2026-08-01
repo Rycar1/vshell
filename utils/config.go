@@ -1,4 +1,5 @@
 // Package utils — Config file parser and settings management.
+// 配置解析与设置管理：解析原版 vshell 的 conf/setting.conf（INI 风格，key=value，# 为注释）。
 //
 // Reverse-engineered from the original vshell binary (v_windows_amd64.exe).
 // The original binary reads conf/setting.conf at startup using an INI-like
@@ -23,6 +24,7 @@ import (
 // FullSettings — complete configuration matching the original binary
 // ============================================================================
 
+// FullSettings 保存 conf/setting.conf 的全部配置，对应原版配置加载器解析的结构体。
 // FullSettings holds all configuration from conf/setting.conf.
 // Mirrors the struct parsed by the original binary's config loader.
 type FullSettings struct {
@@ -72,6 +74,8 @@ var (
 	fullCfgMu   sync.RWMutex
 )
 
+// defaultConfigPath 返回配置文件路径（可用 VSHELL_CONF 环境变量覆盖）。
+// 原版二进制使用相对可执行文件的 "conf/setting.conf"。
 // defaultConfigPath returns the path to the config file.
 // The original binary uses "conf/setting.conf" relative to the executable.
 // Confidence: HIGH (directly observable from original directory structure)
@@ -83,6 +87,7 @@ func defaultConfigPath() string {
 	return "conf/setting.conf"
 }
 
+// LoadConfig 读取并解析配置文件；文件缺失时回退到默认配置（与原版行为一致）。
 // LoadConfig reads and parses the configuration file.
 // Returns the parsed config; falls back to defaults if the file is missing.
 func LoadConfig(path string) (*FullSettings, error) {
@@ -106,6 +111,7 @@ func LoadConfig(path string) (*FullSettings, error) {
 	return cfg, nil
 }
 
+// GetFullSettings 返回已加载的配置（单例，首次调用时读取 conf/setting.conf）。
 // GetFullSettings returns the loaded configuration (singleton).
 // Loads from conf/setting.conf on first call.
 func GetFullSettings() *FullSettings {
@@ -124,7 +130,9 @@ func GetFullSettings() *FullSettings {
 	return fullCfg
 }
 
-// ReloadConfig re-reads the config file (useful for runtime config changes).
+// SetFullSettingsForTest 替换已加载的配置（测试辅助函数）。
+// 先触发单例加载器以消耗 fullCfgOnce，再覆盖 fullCfg，否则后续首次
+// GetFullSettings() 会重新 LoadConfig("") 并冲掉注入的值。
 // SetFullSettingsForTest replaces the loaded settings (test helper).
 // Triggers the singleton loader first so fullCfgOnce is consumed, then
 // overwrites fullCfg — otherwise a later first GetFullSettings() call would
@@ -136,6 +144,8 @@ func SetFullSettingsForTest(cfg *FullSettings) {
 	fullCfgMu.Unlock()
 }
 
+// ReloadConfig 重新读取配置文件（用于运行时配置热更新）。
+// ReloadConfig re-reads the config file (useful for runtime config changes).
 func ReloadConfig(path string) error {
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -147,6 +157,7 @@ func ReloadConfig(path string) error {
 	return nil
 }
 
+// SaveConfig 将当前 FullSettings 写回配置文件；目录不存在时自动创建。
 // SaveConfig writes the current FullSettings back to the config file.
 // Preserves comments and non-managed keys by doing a line-by-line update
 // on the existing file content. If the file doesn't exist, generates a new one.
@@ -178,6 +189,7 @@ func SaveConfig(cfg *FullSettings, path string) error {
 	return nil
 }
 
+// UpdateConfig 对当前配置应用部分更新并保存。
 // UpdateConfig applies partial updates to the current config and saves.
 // Only non-empty/non-zero fields in updates are applied.
 func UpdateConfig(updates map[string]interface{}, path string) error {
@@ -190,6 +202,7 @@ func UpdateConfig(updates map[string]interface{}, path string) error {
 	return SaveConfig(cfg, path)
 }
 
+// generateConfigContent 由 FullSettings 生成 setting.conf 文本（格式与原版输出一致）。
 // generateConfigContent produces a setting.conf from FullSettings.
 // Uses the same format as the original binary's output.
 func generateConfigContent(cfg *FullSettings) string {
@@ -241,6 +254,7 @@ func generateConfigContent(cfg *FullSettings) string {
 	return sb.String()
 }
 
+// filepathDir 从文件路径中提取目录部分（避免额外引入 path/filepath 依赖）。
 // filepathDir extracts the directory from a file path.
 // Avoids importing path/filepath here (already imported in other files).
 func filepathDir(path string) string {
@@ -252,6 +266,7 @@ func filepathDir(path string) string {
 	return ""
 }
 
+// defaultFullSettings 返回与原版一致的默认配置。
 // defaultFullSettings returns sensible defaults matching the original binary.
 // Confidence: HIGH (matches original setting.conf default values)
 func defaultFullSettings() *FullSettings {
@@ -275,6 +290,8 @@ func defaultFullSettings() *FullSettings {
 // INI-like config parser
 // ============================================================================
 
+// parseConfigFile 解析 setting.conf 的 INI 风格配置。
+// 格式（逆向还原，置信度高）：# 开头为注释；空行忽略；key=value（= 两侧空白被去除）；键为 snake_case。
 // parseConfigFile parses the INI-like config format from setting.conf.
 //
 // Format (reverse-engineered, confidence HIGH):
@@ -311,6 +328,7 @@ func parseConfigFile(f *os.File, cfg *FullSettings) error {
 	return scanner.Err()
 }
 
+// applyConfigKey 将单个 key=value 应用到配置结构体，键与原版解码出的字符串常量一致。
 // applyConfigKey applies a single key=value to the config struct.
 // Keys match the original binary's decoded string constants.
 //
@@ -377,6 +395,7 @@ func applyConfigKey(cfg *FullSettings, key, value string) {
 	}
 }
 
+// parseBool 将字符串转换为 bool；无法识别时返回默认值 def。
 // parseBool converts a string to bool. Returns def if the string is not
 // a recognized boolean value.
 func parseBool(s string, def bool) bool {
@@ -394,6 +413,7 @@ func parseBool(s string, def bool) bool {
 // Config → Settings synchronization
 // ============================================================================
 
+// SyncSettingsFromConfig 将全局 Settings 单例（定义于 auth.go）与完整配置同步，启动时调用。
 // SyncSettingsFromConfig synchronizes the global Settings singleton
 // (defined in auth.go) with the full config. Call this during startup.
 func SyncSettingsFromConfig() {

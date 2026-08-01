@@ -20,12 +20,15 @@ import (
 
 // ============================================================================
 // C2 Protocol - Agent Communication Protocol
+// C2 协议——Agent 通信协议
 // ============================================================================
 //
 // The vshell C2 protocol uses HTTP/HTTPS for agent communication.
 // Messages are JSON-encoded with optional AES encryption.
+// vshell C2 协议基于 HTTP/HTTPS，消息 JSON 编码并可选 AES 加密。
 //
 // Agent → Server (Check-in):
+// Agent → 服务器（签到）：
 //   POST /api/checkin
 //   {
 //     "verify_key": "...",
@@ -71,7 +74,8 @@ import (
 // Protocol message types
 // ============================================================================
 
-// CheckinRequest is the agent registration/reconnection message
+// CheckinRequest 是 Agent 注册/重连消息。
+// CheckinRequest is the agent registration/reconnection message.
 type CheckinRequest struct {
 	VerifyKey   string `json:"verify_key"`
 	HostName    string `json:"hostname"`
@@ -84,7 +88,8 @@ type CheckinRequest struct {
 	Version     string `json:"version,omitempty"`
 }
 
-// CheckinResponse is the server's response to agent check-in
+// CheckinResponse 是服务器对 Agent 签到的响应。
+// CheckinResponse is the server's response to agent check-in.
 type CheckinResponse struct {
 	Status    string `json:"status"`
 	ClientID  int64  `json:"client_id"`
@@ -94,25 +99,29 @@ type CheckinResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-// TaskRequest is the agent's task polling request
+// TaskRequest 是 Agent 的任务轮询请求。
+// TaskRequest is the agent's task polling request.
 type TaskRequest struct {
 	ClientID int64 `json:"client_id"`
 }
 
-// TaskResponse wraps pending tasks for an agent
+// TaskResponse 包装发给 Agent 的待处理任务。
+// TaskResponse wraps pending tasks for an agent.
 type TaskResponse struct {
 	Tasks    []TaskItem `json:"tasks"`
 	Interval int        `json:"interval"`
 }
 
-// TaskItem is a single command to execute
+// TaskItem 是单条待执行命令。
+// TaskItem is a single command to execute.
 type TaskItem struct {
 	ID      int64  `json:"id"`
 	Command string `json:"command"`
 	Timeout int    `json:"timeout"`
 }
 
-// ResultRequest is the agent's task result submission
+// ResultRequest 是 Agent 的任务结果提交。
+// ResultRequest is the agent's task result submission.
 //
 // VerifyKey proves the caller knows the listener key; the listener rejects
 // results without it when the listener has a key set.
@@ -124,7 +133,8 @@ type ResultRequest struct {
 	VerifyKey string `json:"verify_key,omitempty"`
 }
 
-// ResultResponse acknowledges receipt
+// ResultResponse 确认收到结果。
+// ResultResponse acknowledges receipt.
 type ResultResponse struct {
 	Status   string `json:"status"`
 	Received bool   `json:"received"`
@@ -134,20 +144,23 @@ type ResultResponse struct {
 // Encryption helpers
 // ============================================================================
 
-// GenerateEncryptSalt creates a random encryption salt
+// GenerateEncryptSalt 生成随机加密盐。
+// GenerateEncryptSalt creates a random encryption salt.
 func GenerateEncryptSalt() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// DeriveKey derives an AES key from a salt and verify key
+// DeriveKey 由盐与验证密钥派生 AES 密钥。
+// DeriveKey derives an AES key from a salt and verify key.
 func DeriveKey(salt, verifyKey string) []byte {
 	h := sha256.Sum256([]byte(salt + ":" + verifyKey))
 	return h[:]
 }
 
-// AESEncrypt encrypts data with AES-256-GCM
+// AESEncrypt 使用 AES-256-GCM 加密数据。
+// AESEncrypt encrypts data with AES-256-GCM.
 func AESEncrypt(plaintext []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -169,7 +182,8 @@ func AESEncrypt(plaintext []byte, key []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// AESDecrypt decrypts data with AES-256-GCM
+// AESDecrypt 使用 AES-256-GCM 解密数据。
+// AESDecrypt decrypts data with AES-256-GCM.
 func AESDecrypt(ciphertext []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -194,7 +208,8 @@ func AESDecrypt(ciphertext []byte, key []byte) ([]byte, error) {
 // Message encoding/decoding
 // ============================================================================
 
-// EncodeMessage encodes a protocol message, optionally with encryption
+// EncodeMessage 编码协议消息，可选加密。
+// EncodeMessage encodes a protocol message, optionally with encryption.
 func EncodeMessage(msg interface{}, key []byte) ([]byte, error) {
 	plaintext, err := json.Marshal(msg)
 	if err != nil {
@@ -214,7 +229,8 @@ func EncodeMessage(msg interface{}, key []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// DecodeMessage decodes a protocol message, optionally with decryption
+// DecodeMessage 解码协议消息，可选解密。
+// DecodeMessage decodes a protocol message, optionally with decryption.
 func DecodeMessage(data []byte, target interface{}, key []byte) error {
 	var raw []byte
 
@@ -240,7 +256,8 @@ func DecodeMessage(data []byte, target interface{}, key []byte) error {
 // Payload compression
 // ============================================================================
 
-// CompressPayload compresses a payload with gzip
+// CompressPayload 使用 gzip 压缩载荷。
+// CompressPayload compresses a payload with gzip.
 func CompressPayload(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)

@@ -21,13 +21,15 @@ import (
 	"vshell/models"
 )
 
-// PluginEngine manages plugin execution
+// PluginEngine 管理插件执行。
+// PluginEngine manages plugin execution.
 type PluginEngine struct {
 	mu      sync.RWMutex
 	plugins map[string]*PluginInstance
 }
 
-// PluginInstance represents a running plugin instance
+// PluginInstance 表示一个运行中的插件实例。
+// PluginInstance represents a running plugin instance.
 type PluginInstance struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
@@ -43,7 +45,8 @@ var pluginEngine = &PluginEngine{
 	plugins: make(map[string]*PluginInstance),
 }
 
-// ExecutePlugin runs a plugin on the given client
+// ExecutePlugin 在指定客户端上运行插件。
+// ExecutePlugin runs a plugin on the given client.
 func (e *PluginEngine) ExecutePlugin(clientID int64, pluginName string, args []string, timeout int) (*PluginInstance, error) {
 	instance := &PluginInstance{
 		ID:        fmt.Sprintf("plugin_%d_%d", clientID, time.Now().UnixNano()),
@@ -133,14 +136,16 @@ func (e *PluginEngine) ExecutePlugin(clientID int64, pluginName string, args []s
 	return instance, nil
 }
 
-// GetPluginStatus returns the status of a plugin execution
+// GetPluginStatus 返回插件执行状态。
+// GetPluginStatus returns the status of a plugin execution.
 func (e *PluginEngine) GetPluginStatus(id string) *PluginInstance {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.plugins[id]
 }
 
-// ListPlugins returns available plugins on disk
+// ListAvailablePlugins 返回磁盘上可用的插件。
+// ListPlugins returns available plugins on disk.
 func ListAvailablePlugins() []models.Plugin {
 	pluginsDir := "plugins"
 	entries, err := os.ReadDir(pluginsDir)
@@ -207,7 +212,8 @@ func findPluginPath(name string) string {
 	return ""
 }
 
-// RunLocalPlugin runs a plugin directly on the server (for testing/exec via agent)
+// RunLocalPlugin 在服务器上直接运行插件（测试/经 Agent 执行用）。
+// RunLocalPlugin runs a plugin directly on the server (for testing/exec via agent).
 func RunLocalPlugin(name string, args []string) (string, error) {
 	path := findPluginPath(name)
 	if path == "" {

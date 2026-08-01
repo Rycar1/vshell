@@ -1,4 +1,5 @@
 // Package utils — DingDing & WeChat robot notification system.
+// 钉钉 / 企业微信机器人告警系统：新 Agent 上线、离线、监听启停、错误等事件推送。
 //
 // Reverse-engineered from the original vshell binary (v_windows_amd64.exe).
 //
@@ -38,6 +39,7 @@ import (
 // Notification types
 // ============================================================================
 
+// NotifyEvent 表示可触发通知的事件类型。
 // NotifyEvent represents a notification-triggering event.
 type NotifyEvent string
 
@@ -50,6 +52,7 @@ const (
 	EventWarning       NotifyEvent = "warning"
 )
 
+// NotifyPayload 保存单条事件的通知数据。
 // NotifyPayload holds the notification data for a single event.
 type NotifyPayload struct {
 	Event     NotifyEvent `json:"event"`
@@ -63,6 +66,7 @@ type NotifyPayload struct {
 // Notifier — sends notifications to configured channels
 // ============================================================================
 
+// Notifier 管理向钉钉/企业微信机器人发送通知。
 // Notifier manages notification delivery to DingDing/WeChat robots.
 type Notifier struct {
 	mu       sync.RWMutex
@@ -77,6 +81,7 @@ var (
 	notifierOnce sync.Once
 )
 
+// GetNotifier 返回全局通知管理器（单例）。
 // GetNotifier returns the global notification manager.
 func GetNotifier() *Notifier {
 	notifierOnce.Do(func() {
@@ -89,6 +94,7 @@ func GetNotifier() *Notifier {
 	return notifier
 }
 
+// Start 启用通知系统并校验配置（至少配置一个渠道才生效）。
 // Start enables the notification system and validates configuration.
 func (n *Notifier) Start() {
 	n.mu.Lock()
@@ -113,6 +119,7 @@ func (n *Notifier) Start() {
 	}
 }
 
+// Send 向所有已配置渠道发送通知；每种事件类型限流（每 60 秒最多 1 条）。
 // Send sends a notification to all configured channels.
 // Rate-limited per event type (max 1 per 60 seconds).
 func (n *Notifier) Send(payload *NotifyPayload) {
@@ -155,8 +162,9 @@ func (n *Notifier) Send(payload *NotifyPayload) {
 // DingDing (钉钉) robot webhook
 // ============================================================================
 
+// DingDingMessage 是钉钉自定义机器人 webhook 的消息体。
+// 参考：https://open.dingtalk.com/document/orgapp/custom-robot-access
 // DingDingMessage is the webhook payload for DingDing robot.
-// Reference: https://open.dingtalk.com/document/orgapp/custom-robot-access
 type DingDingMessage struct {
 	MsgType  string            `json:"msgtype"`
 	Markdown *DingDingMarkdown `json:"markdown,omitempty"`
@@ -172,6 +180,8 @@ type DingDingText struct {
 	Content string `json:"content,omitempty"`
 }
 
+// sendDingDing 异步发送钉钉 markdown 消息。
+// sendDingDing asynchronously sends a DingDing markdown message.
 func (n *Notifier) sendDingDing(cfg *FullSettings, payload *NotifyPayload) {
 	// Build markdown message
 	emoji := dingDingEmoji(payload.Event)
@@ -232,6 +242,8 @@ func (n *Notifier) sendDingDing(cfg *FullSettings, payload *NotifyPayload) {
 	}
 }
 
+// dingDingEmoji 返回事件对应的表情符号。
+// dingDingEmoji returns the emoji for an event type.
 func dingDingEmoji(event NotifyEvent) string {
 	switch event {
 	case EventNewAgent:
@@ -255,8 +267,9 @@ func dingDingEmoji(event NotifyEvent) string {
 // WeChat (企业微信) robot webhook
 // ============================================================================
 
+// WeChatMessage 是企业微信机器人 webhook 的消息体。
+// 参考：https://developer.work.weixin.qq.com/document/path/91770
 // WeChatMessage is the webhook payload for WeChat Work robot.
-// Reference: https://developer.work.weixin.qq.com/document/path/91770
 type WeChatMessage struct {
 	MsgType  string          `json:"msgtype"`
 	Markdown *WeChatMarkdown `json:"markdown,omitempty"`
@@ -272,6 +285,8 @@ type WeChatText struct {
 	MentionedList []string `json:"mentioned_list,omitempty"`
 }
 
+// sendWeChat 异步发送企业微信 markdown 消息。
+// sendWeChat asynchronously sends a WeChat Work markdown message.
 func (n *Notifier) sendWeChat(cfg *FullSettings, payload *NotifyPayload) {
 	title := fmt.Sprintf("【%s】%s", eventLabel(payload.Event), payload.Title)
 
@@ -327,6 +342,8 @@ func (n *Notifier) sendWeChat(cfg *FullSettings, payload *NotifyPayload) {
 	}
 }
 
+// eventLabel 返回事件的中文标签。
+// eventLabel returns the Chinese label for an event type.
 func eventLabel(event NotifyEvent) string {
 	switch event {
 	case EventNewAgent:
@@ -350,6 +367,7 @@ func eventLabel(event NotifyEvent) string {
 // Convenience functions
 // ============================================================================
 
+// NotifyNewAgent 发送新 Agent 上线通知。
 // NotifyNewAgent sends a new-agent-checkin notification.
 func NotifyNewAgent(hostName, userName, osName, remoteAddr string, clientID int64) {
 	GetNotifier().Send(&NotifyPayload{
@@ -367,6 +385,7 @@ func NotifyNewAgent(hostName, userName, osName, remoteAddr string, clientID int6
 	})
 }
 
+// NotifyAgentOffline 发送 Agent 离线通知。
 // NotifyAgentOffline sends an agent-disconnect notification.
 func NotifyAgentOffline(hostName string, clientID int64) {
 	GetNotifier().Send(&NotifyPayload{
@@ -381,6 +400,7 @@ func NotifyAgentOffline(hostName string, clientID int64) {
 	})
 }
 
+// NotifyListenerEvent 发送监听器启停通知。
 // NotifyListenerEvent sends a listener start/stop notification.
 func NotifyListenerEvent(event NotifyEvent, listenAddr, mode string, listenerID int64) {
 	var titleFmt string
@@ -407,6 +427,7 @@ func NotifyListenerEvent(event NotifyEvent, listenAddr, mode string, listenerID 
 // Signing utilities (for DingDing custom robot security)
 // ============================================================================
 
+// DingDingSign 为开启"加签"的钉钉机器人生成签名参数（timestamp + HMAC-SHA256）。
 // DingDingSign generates the sign parameter for DingDing custom robot
 // with additional security (secret-based signature).
 // Only needed if the DingDing robot has "加签" (signature verification) enabled.

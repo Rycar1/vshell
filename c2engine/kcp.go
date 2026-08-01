@@ -17,10 +17,12 @@ import (
 
 // ============================================================================
 // Link Protocol Layer (reverse-engineered from Xq5KwGZr4i package)
+// 链路协议层（逆向自原版 Xq5KwGZr4i 包）
 // ============================================================================
 //
 // The binary implements a custom multiplexed link protocol over raw connections.
 // Messages are length-prefixed and routed by type to different channels.
+// 原版在裸连接上实现自定义多路复用链路协议：消息长度前缀 + 按类型路由到不同信道。
 //
 // Message types:
 //   - Main channel: task data, command results
@@ -29,7 +31,8 @@ import (
 //   - Health: heartbeat and health check
 //   - Close: connection termination
 
-// LinkMsgType identifies the message channel
+// LinkMsgType 标识消息信道。
+// LinkMsgType identifies the message channel.
 type LinkMsgType byte
 
 const (
@@ -41,7 +44,8 @@ const (
 	LinkMsgRetry  LinkMsgType = 0x06 // Retry flag
 )
 
-// Link represents a multiplexed agent connection
+// Link 表示一个多路复用的 Agent 连接。
+// Link represents a multiplexed agent connection.
 type Link struct {
 	ID         string
 	ClientID   int64
@@ -65,7 +69,8 @@ type Link struct {
 	fragTotal int
 }
 
-// NewLink creates a new link over an existing connection
+// NewLink 在现有连接之上创建新链路。
+// NewLink creates a new link over an existing connection.
 func NewLink(conn net.Conn, clientID int64, flow *Flow) *Link {
 	return &Link{
 		ID:           fmt.Sprintf("link_%d_%d", clientID, time.Now().UnixNano()),
@@ -87,7 +92,8 @@ func NewLink(conn net.Conn, clientID int64, flow *Flow) *Link {
 // XBp86cUq4 equivalent - Link methods
 // ============================================================================
 
-// GetShortLenContent reads a length-prefixed message (2-byte length)
+// GetShortLenContent 读取长度前缀消息（2 字节长度）。
+// GetShortLenContent reads a length-prefixed message (2-byte length).
 func (l *Link) GetShortLenContent() ([]byte, error) {
 	// Read 2-byte length
 	lenBuf := make([]byte, 2)
@@ -107,7 +113,8 @@ func (l *Link) GetShortLenContent() ([]byte, error) {
 	return data, nil
 }
 
-// GetShortContent reads a raw message (no length prefix, reads available data)
+// GetShortContent 读取原始消息（无长度前缀，读取可用数据）。
+// GetShortContent reads a raw message (no length prefix, reads available data).
 func (l *Link) GetShortContent() ([]byte, error) {
 	buf := make([]byte, 65536)
 	n, err := l.conn.Read(buf)
@@ -119,7 +126,8 @@ func (l *Link) GetShortContent() ([]byte, error) {
 	return buf[:n], nil
 }
 
-// WriteLenContent writes a length-prefixed message
+// WriteLenContent 写入长度前缀消息。
+// WriteLenContent writes a length-prefixed message.
 func (l *Link) WriteLenContent(data []byte) error {
 	// Write 2-byte length + payload
 	lenBuf := make([]byte, 2)
@@ -136,7 +144,8 @@ func (l *Link) WriteLenContent(data []byte) error {
 	return nil
 }
 
-// ReadFlagRetry reads with retry logic
+// ReadFlagRetry 带重试逻辑读取。
+// ReadFlagRetry reads with retry logic.
 func (l *Link) ReadFlagRetry() (LinkMsgType, []byte, error) {
 	for i := 0; i < 3; i++ {
 		data, err := l.GetShortLenContent()
@@ -151,12 +160,14 @@ func (l *Link) ReadFlagRetry() (LinkMsgType, []byte, error) {
 	return 0, nil, fmt.Errorf("read retry exhausted")
 }
 
+// ReadLen 读取长度前缀载荷（2 字节大端长度，对应原版 Xq5KwGZr4i.(*XBp86cUq4).ReadLen）。
 // ReadLen reads a length-prefixed payload (2-byte big-endian length).
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).ReadLen.
 func (l *Link) ReadLen() ([]byte, error) {
 	return l.GetShortLenContent()
 }
 
+// ReadFlag 读取单个标志字节及其后载荷（对应原版 Xq5KwGZr4i.(*XBp86cUq4).ReadFlag）。
 // ReadFlag reads a single flag byte followed by payload.
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).ReadFlag.
 func (l *Link) ReadFlag() (LinkMsgType, []byte, error) {
@@ -170,6 +181,7 @@ func (l *Link) ReadFlag() (LinkMsgType, []byte, error) {
 	return LinkMsgType(data[0]), data[1:], nil
 }
 
+// GetLen 返回下一条缓冲消息的长度（对应原版 Xq5KwGZr4i.(*XBp86cUq4).GetLen）。
 // GetLen returns the length of the next buffered message.
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).GetLen.
 func (l *Link) GetLen() (int, error) {
@@ -180,6 +192,7 @@ func (l *Link) GetLen() (int, error) {
 	return int(binary.BigEndian.Uint16(lenBuf)), nil
 }
 
+// GetV 返回下一条消息的类型值（对应原版 Xq5KwGZr4i.(*XBp86cUq4).GetV）。
 // GetV returns the message type value of the next message.
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).GetV.
 func (l *Link) GetV() (LinkMsgType, error) {
@@ -193,18 +206,21 @@ func (l *Link) GetV() (LinkMsgType, error) {
 	return LinkMsgType(data[0]), nil
 }
 
+// SendV 写入类型化消息头（仅类型字节，对应原版 Xq5KwGZr4i.(*XBp86cUq4).SendV）。
 // SendV writes a typed message header (type byte only).
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).SendV.
 func (l *Link) SendV(msgType LinkMsgType) error {
 	return l.writeMsg(msgType, nil)
 }
 
+// SendInfo 写入带载荷的类型化消息（对应原版 Xq5KwGZr4i.(*XBp86cUq4).SendInfo）。
 // SendInfo writes a typed message with a payload.
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).SendInfo.
 func (l *Link) SendInfo(msgType LinkMsgType, data []byte) error {
 	return l.writeMsg(msgType, data)
 }
 
+// SetAlive 刷新链路活动时间戳（对应原版 Xq5KwGZr4i.(*XBp86cUq4).SetAlive）。
 // SetAlive refreshes the link activity timestamp.
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).SetAlive.
 func (l *Link) SetAlive() {
@@ -213,12 +229,14 @@ func (l *Link) SetAlive() {
 	l.lastActive = time.Now()
 }
 
-// SetReadDeadlineBySecond sets read deadline in seconds
+// SetReadDeadlineBySecond 以秒为单位设置读截止时间。
+// SetReadDeadlineBySecond sets read deadline in seconds.
 func (l *Link) SetReadDeadlineBySecond(seconds int) {
 	l.conn.SetReadDeadline(time.Now().Add(time.Duration(seconds) * time.Second))
 }
 
-// SetWriteDeadlineBySecond sets write deadline in seconds
+// SetWriteDeadlineBySecond 以秒为单位设置写截止时间。
+// SetWriteDeadlineBySecond sets write deadline in seconds.
 func (l *Link) SetWriteDeadlineBySecond(seconds int) {
 	l.conn.SetWriteDeadline(time.Now().Add(time.Duration(seconds) * time.Second))
 }
@@ -227,22 +245,26 @@ func (l *Link) SetWriteDeadlineBySecond(seconds int) {
 // Message routing (WriteMain, WriteConfig, WriteChan, WriteClose)
 // ============================================================================
 
-// WriteMain sends data on the main channel
+// WriteMain 在主信道上发送数据。
+// WriteMain sends data on the main channel.
 func (l *Link) WriteMain(data []byte) error {
 	return l.writeMsg(LinkMsgMain, data)
 }
 
-// WriteConfig sends configuration data
+// WriteConfig 发送配置数据。
+// WriteConfig sends configuration data.
 func (l *Link) WriteConfig(data []byte) error {
 	return l.writeMsg(LinkMsgConfig, data)
 }
 
-// WriteChan sends tunnel/proxy channel data
+// WriteChan 发送隧道/代理信道数据。
+// WriteChan sends tunnel/proxy channel data.
 func (l *Link) WriteChan(data []byte) error {
 	return l.writeMsg(LinkMsgChan, data)
 }
 
-// WriteClose sends a close message
+// WriteClose 发送关闭消息。
+// WriteClose sends a close message.
 func (l *Link) WriteClose() error {
 	return l.writeMsg(LinkMsgClose, nil)
 }
@@ -258,7 +280,8 @@ func (l *Link) writeMsg(msgType LinkMsgType, data []byte) error {
 // Info methods
 // ============================================================================
 
-// GetLinkInfo returns link metadata
+// GetLinkInfo 返回链路元数据。
+// GetLinkInfo returns link metadata.
 func (l *Link) GetLinkInfo() map[string]interface{} {
 	return map[string]interface{}{
 		"id":         l.ID,
@@ -269,7 +292,8 @@ func (l *Link) GetLinkInfo() map[string]interface{} {
 	}
 }
 
-// SendHealthInfo sends a health/heartbeat message
+// SendHealthInfo 发送健康/心跳消息。
+// SendHealthInfo sends a health/heartbeat message.
 func (l *Link) SendHealthInfo() error {
 	health := map[string]interface{}{
 		"time":   time.Now().Unix(),
@@ -279,7 +303,8 @@ func (l *Link) SendHealthInfo() error {
 	return l.writeMsg(LinkMsgHealth, data)
 }
 
-// GetHealthInfo reads and validates a health message
+// GetHealthInfo 读取并校验健康消息。
+// GetHealthInfo reads and validates a health message.
 func (l *Link) GetHealthInfo() (map[string]interface{}, error) {
 	msgType, data, err := l.ReadFlagRetry()
 	if err != nil {
@@ -295,7 +320,8 @@ func (l *Link) GetHealthInfo() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// GetHostInfo reads host configuration info
+// GetHostInfo 读取 Host 配置信息。
+// GetHostInfo reads host configuration info.
 func (l *Link) GetHostInfo() (map[string]interface{}, error) {
 	msgType, data, err := l.ReadFlagRetry()
 	if err != nil {
@@ -311,12 +337,14 @@ func (l *Link) GetHostInfo() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// GetConfigInfo reads agent configuration
+// GetConfigInfo 读取 Agent 配置。
+// GetConfigInfo reads agent configuration.
 func (l *Link) GetConfigInfo() (map[string]interface{}, error) {
 	return l.GetHostInfo()
 }
 
-// GetTaskInfo reads task request from agent
+// GetTaskInfo 读取来自 Agent 的任务请求。
+// GetTaskInfo reads task request from agent.
 func (l *Link) GetTaskInfo() ([]byte, error) {
 	_, data, err := l.ReadFlagRetry()
 	if err != nil {
@@ -325,7 +353,8 @@ func (l *Link) GetTaskInfo() ([]byte, error) {
 	return data, nil
 }
 
-// GetAddStatus checks if connection was accepted
+// GetAddStatus 检查连接是否被接受。
+// GetAddStatus checks if connection was accepted.
 func (l *Link) GetAddStatus() bool {
 	select {
 	case <-l.closeCh:
@@ -335,6 +364,7 @@ func (l *Link) GetAddStatus() bool {
 	}
 }
 
+// WriteAddOk 标记连接已被接受（与 WriteAddFail 相反，对应原版 Xq5KwGZr4i.(*XBp86cUq4).WriteAddOk）。
 // WriteAddOk marks the connection as accepted (inverse of WriteAddFail).
 // Original binary: Xq5KwGZr4i.(*XBp86cUq4).WriteAddOk.
 func (l *Link) WriteAddOk() {
@@ -343,7 +373,8 @@ func (l *Link) WriteAddOk() {
 	l.addStatus = true
 }
 
-// WriteAddFail marks connection as failed
+// WriteAddFail 标记连接失败。
+// WriteAddFail marks connection as failed.
 func (l *Link) WriteAddFail() {
 	select {
 	case <-l.closeCh:
@@ -355,27 +386,32 @@ func (l *Link) WriteAddFail() {
 	l.mu.Unlock()
 }
 
-// LocalAddr returns the local address
+// LocalAddr 返回本地地址。
+// LocalAddr returns the local address.
 func (l *Link) LocalAddr() net.Addr {
 	return l.conn.LocalAddr()
 }
 
-// RemoteAddr returns the remote address
+// RemoteAddr 返回远端地址。
+// RemoteAddr returns the remote address.
 func (l *Link) RemoteAddr() net.Addr {
 	return l.conn.RemoteAddr()
 }
 
-// SetDeadline sets both read and write deadlines
+// SetDeadline 同时设置读写截止时间。
+// SetDeadline sets both read and write deadlines.
 func (l *Link) SetDeadline(t time.Time) error {
 	return l.conn.SetDeadline(t)
 }
 
-// SetWriteDeadline sets the write deadline
+// SetWriteDeadline 设置写截止时间。
+// SetWriteDeadline sets the write deadline.
 func (l *Link) SetWriteDeadline(t time.Time) error {
 	return l.conn.SetWriteDeadline(t)
 }
 
-// SetReadDeadline sets the read deadline
+// SetReadDeadline 设置读截止时间。
+// SetReadDeadline sets the read deadline.
 func (l *Link) SetReadDeadline(t time.Time) error {
 	return l.conn.SetReadDeadline(t)
 }
