@@ -43,11 +43,10 @@
 vshell/
 ├── main.go            # 入口：加载配置、初始化引擎/数据库/路由 / Entry: config, engine, db, router
 ├── conf/              # 配置文件（gitignore 排除，含密钥）/ Config files (gitignored; contains keys)
-├── c2engine/          # C2 引擎：监听器、协议、KCP/DNS、健康检查、存储 / Engine: listeners, protocol, KCP/DNS, health, storage
+├── c2engine/          # C2 引擎：监听器、协议、KCP/DNS、存储（SQL 层）/ Engine: listeners, protocol, KCP/DNS, storage (SQL)
 ├── agent/             # Agent：终端/屏幕/插件；ldflags 注入配置 / Agent: terminal/screen/plugins; ldflags injection
 ├── controllers/       # Web API 控制器 / Web API controllers
 ├── router/            # HTTP 路由与中间件 / HTTP routing & middleware
-├── models/            # 数据模型与 SQLite 持久化 / Data models & SQLite persistence
 ├── utils/             # 配置解析、认证、许可证、通知 / Config, auth, license, notifications
 └── static/            # 前端 SPA（从原版二进制提取）/ Frontend SPA (extracted from the original binary)
 ```
@@ -108,6 +107,47 @@ go build -ldflags "\
 
 通过 Web 面板 API 动态创建监听器（`c2engine.NewListener(listenAddr, connectAddr, mode, verifyKey, encryptSalt, remark)`），支持模式：`http` / `https` / `dns` / `kcp` / `websocket`（CDN）。
 Listeners are created dynamically through the web panel API. Supported modes: `http` / `https` / `dns` / `kcp` / `websocket` (CDN).
+
+---
+
+## 逆向工程进度 / Reverse-Engineering Status
+
+> 本项目对原版 Windows 二进制（`v_windows_amd64.exe`，garble 混淆 Go 1.21+）进行**自顶向下**逆向：每个模块与 Ghidra 反编译结果 1:1 对齐，禁止自行臆造实现。以下为当前状态。
+> This project reverse-engineers the original Windows binary (`v_windows_amd64.exe`, garble-obfuscated Go 1.21+) **top-down**: every module is aligned 1:1 with its Ghidra decompilation, no invented implementations. Current status:
+
+### 已实现（1:1 对齐 + 测试验证）/ Implemented (1:1 aligned & test-verified)
+
+| 模块 / Module | 对齐内容 / Aligned content | 验证 / Verification |
+|---|---|---|
+| `c2engine/storage.go` | SQL 层（clients/listeners/hosts/tasks 全表）与反编译 SQL 逐字段一致 | 运行时 DB schema 动态比对 ✓ |
+| `c2engine/wire.go` | 24B 类型化字段帧（kind 字节 + flags + 3 dword） | 单测 ✓ |
+| `c2engine/channel_frame.go` | 频道/隧道帧协议（FUN_011b4040/011b5600/011b5b40 等 6 函数） | 6 测试 ✓ |
+| `c2engine/dns.go` | DNS 信道 = Go 标准 base32（无填充）；查询 = `[8B agent ID][消息].domain` | 测试 ✓ |
+| `c2engine/kcp.go / protocol.go / engine.go` | KCP/协议/监听器调度 | 测试 ✓ |
+| `controllers/*`（16 文件） | 全部控制器对齐反编译 API（登录/客户端/监听器/文件/下载/屏幕/隧道/插件） | 测试 ✓ |
+| `router/` + `utils/` | 路由、中间件、配置、认证、许可证、通知 | 测试 ✓ |
+
+**破解成果 / Cracked artifacts**：
+- 登录：password = `web_password` 原文 → JWT（admin/qwe123qwe）
+- 线格式：`<u32 LE 长度><加密载荷>`（strace 实锤）
+- AES 密钥：`22f97f672c3c5113d31fcaaad26fce42`（密钥调度逆推，rk1 验证）
+- Agent 二进制提取：5+ 变体（linux_amd64/386/arm、darwin、tcp/dns/ws），动态注册 clientId 2-14
+- Agent 配置 JSON：`{server,type,vkey,proxy,salt,l,e,d,h}` 全捕获
+- **消息帧结构**：`[16B IV][21B ct]` = 37B；PT = JSON 直接（`{"VerifyKey":"0l...`）
+- **counter 结构**：`[rbx 运行时常量][len 0x0015×4 广播]`；state = counter XOR key
+- 服务器 AES-128（FUN_0053a1e0）实现验证 roundtrip；T 表 = 标准 Td0 字节交换变体
+- Channel/隧道对象（会话 230-237）、Client 结构体（22 字段 @ 0x1bb9580）、Checkin 链全部解码
+
+### 未实现 / Not yet implemented
+
+| 项 / Item | 状态 / Status | 难度 / Difficulty |
+|---|---|---|
+| **0x458f00 精确轮结构重建** | 3×aesenc 自密钥链输出 vs 密钥流不匹配；缺输入窗口/掩码语义。帧结构已确认，差最后一环 | 高（运行时轮序） |
+| **Agent 999 函数全量映射** | ~60+ 函数已映射（架构框架 + 加密链）；剩余 ~930 逐函数对齐反编译 | 多周规模 |
+| **Agent 源码对齐** | `agent/main.go`（1607 行）为早期未对齐版本；实际加密 = 自定义链（非标准 AES-GCM） | 高 |
+| **serT 状态机字符串** | FUN_017019c0 深加密，已放弃静态解 | 极高 |
+| **226B 解密 stub** | FUN_011a02e0/01564720 静态求解受阻 | 高 |
+| **DNS 注册完整闭环** | 需消息帧解密完成后验证 | 中 |
 
 ---
 
