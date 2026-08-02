@@ -90,12 +90,13 @@ func TestDNSSubdomainFormatMatchesAgentEncoding(t *testing.T) {
 
 	msg := `{"type":"result","id":1,"result":"ok"}`
 	encoded := dl.encodeData(msg)
-	if !strings.Contains(encoded, "") {
-		// hex is alphanumeric — valid DNS label chars
+	if encoded == "" {
+		t.Errorf("encoded empty")
 	}
+	// base32（A-Z2-7）— 全为合法 DNS 标签字符
 	for _, c := range encoded {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			t.Errorf("encoded char %q not DNS-safe", c)
+		if !(c >= 'A' && c <= 'Z' || c >= '2' && c <= '7') {
+			t.Errorf("encoded char %q not base32/DNS-safe", c)
 		}
 	}
 	// The subdomain parse: <encoded>.<agentid>.<domain>
@@ -106,7 +107,8 @@ func TestDNSSubdomainFormatMatchesAgentEncoding(t *testing.T) {
 	}
 	trimmed := strings.TrimSuffix(lower, "."+"ns.test.local")
 	parts := strings.Split(trimmed, ".")
-	if parts[0] != encoded {
+	// DNS 标签大小写不敏感 — 与 base32 大写编码比较时忽略大小写
+	if !strings.EqualFold(parts[0], encoded) {
 		t.Errorf("first label = %q, want %q", parts[0], encoded)
 	}
 	if len(parts) > 1 && parts[len(parts)-1] != "agent9" {

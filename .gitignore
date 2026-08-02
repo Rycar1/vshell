@@ -97,3 +97,23 @@ scripts/
 # --- Original binary & license (private / large) ---
 v_windows_amd64/
 license.txt
+
+# --- Extracted agent binaries (large, regenerable from server) ---
+agent_*
+!agent/
+
+# --- Large RE memory dumps (regenerable) ---
+.re/mem_strings_*.txt
+.re/*.bin
+.re/full_*.bin
+.re/heap*.bin
+.re/sw_*.bin
+.re/k*.bin
+.re/w*.bin
+.re/h*.bin
+.re/dns_*.bin
+.re/pt*.bin
+.re/around.bin
+.re/first37.bin
+.re/watch1.bin
+.re/wbuf.bin

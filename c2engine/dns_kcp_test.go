@@ -1,7 +1,7 @@
 package c2engine
 
 import (
-	"encoding/hex"
+	"encoding/base32"
 	"testing"
 )
 
@@ -10,15 +10,15 @@ import (
 func TestDNSEncodeDecodeRoundTrip(t *testing.T) {
 	dl := &DNSListener{}
 
-	// Short message → hex
+	// 黑盒实锤（session 171）：DNS 标签 = Go 标准 base32（无填充）。
 	short := `{"type":"checkin","vkey":"k1"}`
 	enc := dl.encodeData(short)
-	if enc != hex.EncodeToString([]byte(short)) {
-		t.Errorf("short encode = %q, want hex", enc)
+	if enc != base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(short)) {
+		t.Errorf("encode = %q, want base32", enc)
 	}
 	dec, err := dl.decodeData(enc)
 	if err != nil || string(dec) != short {
-		t.Errorf("short decode = %q (%v), want %q", dec, err, short)
+		t.Errorf("decode = %q (%v), want %q", dec, err, short)
 	}
 
 	// Long message → base64url

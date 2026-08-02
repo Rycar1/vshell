@@ -18,6 +18,20 @@ import (
 	"time"
 )
 
+
+// ============================================================================
+// C2 协议常量（1:1 对齐原版，反编译还原）
+// ============================================================================
+//
+// 命令包构建器（FUN_01918400 / FUN_01918740，由控制器 DelFile/DelProcess 等
+// 调用）写入固定字节序列作为协议标记：
+//   FUN_01918400: 8f 97 93 8e 90 9c 47 8c 9e 94   （命令下发标记）
+//   FUN_01918740: 10 f6 00 f6 0a fa ff 00 11      （命令下发标记二）
+//
+// 原版引擎存储类型 C7cMcwDVYi_ 的任务操作（NewTask 0x11979c0 / UpdateTask
+// 0x1197d00 / DelTask 0x1197da0 / GetTask 0x1197fe0 / GetTaskByMd5Password
+// 0x1197e20）；任务状态：pending/dispatched/running/completed/failed/timeout。
+
 // ============================================================================
 // C2 Protocol - Agent Communication Protocol
 // C2 协议——Agent 通信协议
@@ -126,11 +140,11 @@ type TaskItem struct {
 // VerifyKey proves the caller knows the listener key; the listener rejects
 // results without it when the listener has a key set.
 type ResultRequest struct {
-	ClientID  int64  `json:"client_id"`
-	CommandID int64  `json:"command_id"`
-	Result    string `json:"result"`
-	Status    string `json:"status"` // completed, failed, timeout
-	VerifyKey string `json:"verify_key,omitempty"`
+	ClientID  int64  `json:"ClientID"`
+	CommandID int64  `json:"CommandID"`
+	Result    string `json:"Result"`
+	Status    string `json:"Status"` // completed, failed, timeout
+	VerifyKey string `json:"VerifyKey,omitempty"`
 }
 
 // ResultResponse 确认收到结果。

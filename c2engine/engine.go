@@ -1,9 +1,8 @@
 package c2engine
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -97,6 +96,14 @@ func (e *Engine) Init(config *Config) error {
 
 	Logf("Engine initialized with %d clients, %d listeners, %d tunnels, %d hosts",
 		len(e.clients), len(e.listeners), len(e.tunnels), len(e.hosts))
+	return nil
+}
+
+// Close releases the storage (SQLite) connection.
+func (e *Engine) Close() error {
+	if e.storage != nil {
+		return e.storage.Close()
+	}
 	return nil
 }
 
@@ -197,16 +204,131 @@ func (e *Engine) GetClient(id int64) *Client {
 	return e.clients[id]
 }
 
-// GetClientList returns all clients as a slice
-func (e *Engine) GetClientList() []*Client {
+// tunnelExists 客户端是否已建指定隧道（Client.HasTunnel 使用）。
+func (e *Engine) tunnelExists(clientID, tunnelID int64) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	t, ok := e.tunnels[tunnelID]
+	return ok && t != nil && t.ClientID == clientID
+}
+
+// tunnelCount 统计客户端隧道数（Client.GetTunnelNum 使用）。
+func (e *Engine) tunnelCount(clientID int64) int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	n := 0
+	for _, t := range e.tunnels {
+		if t.ClientID == clientID {
+			n++
+		}
+	}
+	return n
+}
+
+// hostExists 客户端是否已建指定主机（Client.HasHost 使用）。
+func (e *Engine) hostExists(clientID, hostID int64) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	h, ok := e.hosts[hostID]
+	return ok && h != nil && h.ClientID == clientID
+}
+
+// GetClientList 分页返回客户端列表（反编译 FUN_011970a0，30KB）：
+// 参数 offset/limit 分页；field/order 排序（FUN_0049d800 字符串比较）；
+// search 按字段过滤；status 过滤在线/离线。
+func (e *Engine) GetClientList(offset, limit int, field, order, search, sort string, status int) ([]*Client, int64) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	result := make([]*Client, 0, len(e.clients))
+	// 按 sort 字段排序（原版 FUN_0049d800 字符串比较），order 控制方向
+	all := make([]*Client, 0, len(e.clients))
 	for _, c := range e.clients {
-		result = append(result, c)
+		all = append(all, c)
 	}
-	return result
+	sortClients(all, field, order)
+
+	// search 过滤（原版按字段包含匹配）
+	filtered := all
+	if search != "" {
+		filtered = make([]*Client, 0, len(all))
+		for _, c := range all {
+			if clientMatches(c, search) {
+				filtered = append(filtered, c)
+			}
+		}
+	}
+
+	// status 过滤：1=仅在线，2=仅离线
+	if status == 1 || status == 2 {
+		f := make([]*Client, 0, len(filtered))
+		for _, c := range filtered {
+			online := c.NowConn > 0
+			if (status == 1 && online) || (status == 2 && !online) {
+				f = append(f, c)
+			}
+		}
+		filtered = f
+	}
+
+	total := int64(len(filtered))
+	if offset >= len(filtered) {
+		return []*Client{}, total
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[offset:end], total
+}
+
+// sortClients 按 field 字段排序（原版 GetClientList 排序逻辑）。
+func sortClients(list []*Client, field, order string) {
+	less := func(i, j int) bool {
+		a, b := list[i], list[j]
+		var r bool
+		switch field {
+		case "id":
+			r = a.ID < b.ID
+		case "ip":
+			r = a.Addr < b.Addr
+		case "remark":
+			r = a.Remark < b.Remark
+		case "os":
+			r = a.OSType < b.OSType
+		case "arch":
+			r = a.Arch < b.Arch
+		case "version":
+			r = a.Version < b.Version
+		case "lastTime":
+			r = a.LastTime < b.LastTime
+		default:
+			r = a.ID < b.ID
+		}
+		if order == "desc" {
+			return !r
+		}
+		return r
+	}
+	sort.SliceStable(list, less)
+}
+
+// clientMatches 检查客户端是否匹配 search 关键字。
+func clientMatches(c *Client, search string) bool {
+	return contains(c.Addr, search) || contains(c.Remark, search) ||
+		contains(c.OSType, search) || contains(c.Arch, search) || contains(c.Version, search)
+}
+
+func contains(s, sub string) bool {
+	return len(sub) > 0 && len(s) >= len(sub) && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // GetClientIdByVkey finds a client ID by its verify key
@@ -775,226 +897,3 @@ func (e *Engine) Save() {
 	e.storage.StoreTasks(e.tasks)
 }
 
-// ============================================================================
-// Storage - JSON file persistence (equivalent to eSxbx2zKVifD.ZSeQgw1dB4ft)
-// ============================================================================
-
-// Storage handles persistence of engine data to JSON files
-type Storage struct {
-	basePath string
-}
-
-// NewStorage creates a new storage instance
-func NewStorage(basePath string) *Storage {
-	if basePath == "" {
-		basePath = "db/data.db"
-	}
-	// Ensure directory exists
-	dir := basePath
-	for i := len(basePath) - 1; i >= 0; i-- {
-		if basePath[i] == '/' || basePath[i] == '\\' {
-			dir = basePath[:i]
-			break
-		}
-	}
-	os.MkdirAll(dir, 0755)
-	return &Storage{basePath: basePath}
-}
-
-func (s *Storage) path(name string) string {
-	dir := s.basePath
-	for i := len(s.basePath) - 1; i >= 0; i-- {
-		if s.basePath[i] == '/' || s.basePath[i] == '\\' {
-			dir = s.basePath[:i]
-			break
-		}
-	}
-	return dir + "/" + name + ".json"
-}
-
-// StoreClientsToJsonFile persists client list
-func (s *Storage) StoreClients(clients map[int64]*Client) {
-	data, _ := json.MarshalIndent(clients, "", "  ")
-	os.WriteFile(s.path("clients"), data, 0644)
-}
-
-// LoadClientFromSqlFile loads clients from JSON (named after original binary)
-func (s *Storage) LoadClients(clients map[int64]*Client, seq *int64) error {
-	data, err := os.ReadFile(s.path("clients"))
-	if err != nil {
-		return err
-	}
-	var loaded map[int64]*Client
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return err
-	}
-	for id, c := range loaded {
-		clients[id] = c
-		c.tunnels = make(map[int64]bool)
-		c.Hosts = make(map[int64]bool)
-		if c.Flow == nil {
-			c.Flow = &Flow{}
-		}
-		if id > *seq {
-			*seq = id
-		}
-	}
-	return nil
-}
-
-// StoreListenerToJsonFile persists listener list
-func (s *Storage) StoreListeners(listeners map[int64]*Listener) {
-	data, _ := json.MarshalIndent(listeners, "", "  ")
-	os.WriteFile(s.path("listeners"), data, 0644)
-}
-
-// LoadListenerFromSqlFile loads listeners from JSON
-func (s *Storage) LoadListeners(listeners map[int64]*Listener, seq *int64) error {
-	data, err := os.ReadFile(s.path("listeners"))
-	if err != nil {
-		return err
-	}
-	var loaded map[int64]*Listener
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return err
-	}
-	for id, l := range loaded {
-		listeners[id] = l
-		if id > *seq {
-			*seq = id
-		}
-	}
-	return nil
-}
-
-// StoreHostToJsonFile persists host list
-func (s *Storage) StoreHosts(hosts map[int64]*Host) {
-	data, _ := json.MarshalIndent(hosts, "", "  ")
-	os.WriteFile(s.path("hosts"), data, 0644)
-}
-
-// LoadHostFromSqlFile loads hosts from JSON
-func (s *Storage) LoadHosts(hosts map[int64]*Host, seq *int64) error {
-	data, err := os.ReadFile(s.path("hosts"))
-	if err != nil {
-		return err
-	}
-	var loaded map[int64]*Host
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return err
-	}
-	for id, h := range loaded {
-		hosts[id] = h
-		if h.Flow == nil {
-			h.Flow = &Flow{}
-		}
-		if h.Health == nil {
-			h.Health = &Health{}
-		}
-		if id > *seq {
-			*seq = id
-		}
-	}
-	return nil
-}
-
-// StoreTasksToJsonFile persists tasks
-func (s *Storage) StoreTasks(tasks map[int64]*Task) {
-	data, _ := json.MarshalIndent(tasks, "", "  ")
-	os.WriteFile(s.path("tasks"), data, 0644)
-}
-
-// LoadTaskFromSqlFile loads tasks from JSON
-func (s *Storage) LoadTasks(tasks map[int64]*Task, seq *int64) error {
-	data, err := os.ReadFile(s.path("tasks"))
-	if err != nil {
-		return err
-	}
-	var loaded map[int64]*Task
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return err
-	}
-	for id, t := range loaded {
-		tasks[id] = t
-		if id > *seq {
-			*seq = id
-		}
-	}
-	return nil
-}
-
-// DelClient removes a client's persisted data
-func (s *Storage) DelClient(id int64) {
-	// Data is re-saved as part of StoreClients
-}
-
-// DelHost removes a host's persisted data
-func (s *Storage) DelHost(id int64) {
-	// Data is re-saved as part of StoreHosts
-}
-
-// DelTunnel removes a tunnel's persisted data
-func (s *Storage) DelTunnel(id int64) {
-	// Tunnels are not independently persisted
-}
-
-// DelListener removes a listener's persisted data
-func (s *Storage) DelListener(id int64) {
-	// Data is re-saved as part of StoreListeners
-}
-
-// InitDbFile initializes the database files
-
-// StoreClientsToJsonFile is the original binary's method name
-// (eSxbx2zKVifD.(*ZSeQgw1dB4ft).StoreClientsToJsonFile); the current
-// implementation persists clients via StoreClients.
-func (s *Storage) StoreClientsToJsonFile(clients map[int64]*Client) {
-	s.StoreClients(clients)
-}
-
-// StoreListenerToJsonFile is the original binary's method name for
-// persisting listeners.
-func (s *Storage) StoreListenerToJsonFile(listeners map[int64]*Listener) {
-	s.StoreListeners(listeners)
-}
-
-// StoreHostToJsonFile is the original binary's method name for
-// persisting hosts.
-func (s *Storage) StoreHostToJsonFile(hosts map[int64]*Host) {
-	s.StoreHosts(hosts)
-}
-
-// StoreTasksToJsonFile is the original binary's method name for
-// persisting tasks.
-func (s *Storage) StoreTasksToJsonFile(tasks map[int64]*Task) {
-	s.StoreTasks(tasks)
-}
-
-// LoadClientFromSqlFile is the original binary's method name for
-// loading persisted clients.
-func (s *Storage) LoadClientFromSqlFile(clients map[int64]*Client, seq *int64) error {
-	return s.LoadClients(clients, seq)
-}
-
-// LoadListenerFromSqlFile is the original binary's method name for
-// loading persisted listeners.
-func (s *Storage) LoadListenerFromSqlFile(listeners map[int64]*Listener, seq *int64) error {
-	return s.LoadListeners(listeners, seq)
-}
-
-// LoadHostFromSqlFile is the original binary's method name for
-// loading persisted hosts.
-func (s *Storage) LoadHostFromSqlFile(hosts map[int64]*Host, seq *int64) error {
-	return s.LoadHosts(hosts, seq)
-}
-
-// LoadTaskFromSqlFile is the original binary's method name for
-// loading persisted tasks.
-func (s *Storage) LoadTaskFromSqlFile(tasks map[int64]*Task, seq *int64) error {
-	return s.LoadTasks(tasks, seq)
-}
-
-func (s *Storage) InitDbFile() error {
-	os.MkdirAll(s.basePath, 0755)
-	return nil
-}

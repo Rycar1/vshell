@@ -15,24 +15,28 @@ import (
 func TestAPIAuthRequired(t *testing.T) {
 	mux := InitRouter()
 
-	protected := []string{
-		"/api/runner",
-		"/api/client/list",
-		"/api/setting/get",
-		"/api/file/ls",
-		"/api/listener/list",
-		"/api/tunnel/list",
-		"/api/download/stageless",
-		"/api/getUserInfo",
-		"/api/getMenuList",
+	protected := []struct {
+		path   string
+		method string
+	}{
+		{"/api/runner/list", http.MethodGet},
+		{"/api/client/list", http.MethodPost},
+		{"/api/setting/get", http.MethodGet},
+		{"/api/file/ls", http.MethodPost},
+		{"/api/listener/list", http.MethodPost},
+		{"/api/tunnel/list", http.MethodPost},
+		{"/api/download/stageless", http.MethodPost},
+		{"/api/getUserInfo", http.MethodGet},
+		{"/api/getMenuList", http.MethodGet},
+		{"/api/terminal/shell", http.MethodPost},
 	}
 
-	for _, path := range protected {
-		req := httptest.NewRequest(http.MethodPost, path, nil)
+	for _, pc := range protected {
+		req := httptest.NewRequest(pc.method, pc.path, nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("%s without token = %d, want 401", path, rec.Code)
+			t.Errorf("%s without token = %d, want 401", pc.path, rec.Code)
 		}
 
 		// With a valid token the request should pass the middleware (the
@@ -41,12 +45,12 @@ func TestAPIAuthRequired(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generate token: %v", err)
 		}
-		req2 := httptest.NewRequest(http.MethodPost, path, nil)
+		req2 := httptest.NewRequest(pc.method, pc.path, nil)
 		req2.Header.Set("Token", tok)
 		rec2 := httptest.NewRecorder()
 		mux.ServeHTTP(rec2, req2)
 		if rec2.Code == http.StatusUnauthorized {
-			t.Errorf("%s with valid token = 401, want non-401", path)
+			t.Errorf("%s with valid token = 401, want non-401", pc.path)
 		}
 	}
 }

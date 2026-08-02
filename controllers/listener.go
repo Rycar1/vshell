@@ -1,276 +1,158 @@
-// Package controllers/listener 实现 C2 监听器的管理（增删改查、启停）。
-// Package controllers/listener implements C2 listener management (CRUD, start/stop).
+// Package controllers — 监听器控制器，1:1 对齐原版二进制。
+//
+// 真实方法（funcnametab + 反编译地址）：
+//
+//	List       0x18ea020   POST /listener/list      分页监听器列表
+//	EditRemark 0x18ebe80   POST /listener/editremark 修改备注
+//	DelList    0x18ebf80   POST /listener/dellist    批量删除
+//	Del        0x18ec040   POST /listener/del        删除单个
+//	Stop       0x18ec140   POST /listener/stop       停止
+//	Start      0x18ec1e0   POST /listener/start      启动
+//	Edit       0x18ec280   POST /listener/edit       编辑
+//	Add        0x18ec880   POST /listener/add        新增
+//
+// 前端路由（内嵌 JS url:"/listener/..."）与之对应。
 package controllers
 
-import (
-	"fmt"
-	"log"
-
-	"vshell/c2engine"
-	"vshell/models"
-)
-
 // ListenerController 管理 C2 监听器。
-// ListenerController manages C2 listeners.
 type ListenerController struct {
-	BaseController
+	ApiBaseController
 }
 
-// Get 列出全部监听器。
-// Get lists all listeners.
-func (c *ListenerController) Get() {
-	db := models.GetDB()
-	if db == nil {
-		c.JSONOk(paginatedResult([]interface{}{}, 0))
-		return
-	}
-
-	listeners, err := db.ListListeners()
-	if err != nil {
-		c.Error(err.Error())
-		return
-	}
-
-	if listeners == nil {
-		listeners = []*models.Listener{}
-	}
-	c.JSONOk(paginatedResult(listeners, len(listeners)))
-}
-
-// Post 创建新监听器。
-// Post creates a new listener.
-func (c *ListenerController) Post() {
-	db := models.GetDB()
-	if db == nil {
-		c.Error("Database not initialized")
-		return
-	}
-
-	listener := &models.Listener{
-		Status:            true,
-		ListenAddr:        c.GetString("listen_addr", "0.0.0.0:443"),
-		ConnectAddr:       c.GetString("connect_addr"),
-		Remark:            c.GetString("remark"),
-		Mode:              c.GetString("mode", "http"),
-		VerifyKey:         c.GetString("vkey"),
-		EncryptSalt:       c.GetString("encrypt_salt"),
-		DisconnectTimeout: 0,
-		PingInterval:      0,
-		DNSDomain:         c.GetString("dns_domain"),
-		PublicDNS:         c.GetString("public_dns"),
-		MaxDNSsize:        512,
-		OssUrl:            c.GetString("oss_url"),
-		NoStore:           false,
-	}
-
-	id, err := db.CreateListener(listener)
-	if err != nil {
-		c.Error("Failed to create listener: " + err.Error())
-		return
-	}
-
-	listener.ID = id
-
-	// Register C2 routes for this listener
-	RegisterListenerC2(listener)
-
-	c.JSONOk(listener)
-}
-
-// Put 更新监听器。
-// Put updates a listener.
-func (c *ListenerController) Put() {
-	id, _ := c.GetInt64("id")
-	db := models.GetDB()
-	if db == nil {
-		c.Error("Database not initialized")
-		return
-	}
-
-	listener, err := db.GetListener(id)
-	if err != nil {
-		c.Error("Listener not found")
-		return
-	}
-
-	if v := c.GetString("listen_addr"); v != "" {
-		listener.ListenAddr = v
-	}
-	if v := c.GetString("remark"); v != "" {
-		listener.Remark = v
-	}
-	if v := c.GetString("mode"); v != "" {
-		listener.Mode = v
-	}
-	if v := c.GetString("vkey"); v != "" {
-		listener.VerifyKey = v
-	}
-
-	if err := db.UpdateListener(listener); err != nil {
-		c.Error("Failed to update: " + err.Error())
-		return
-	}
-
-	c.JSONOk(listener)
-}
-
-// Delete 删除监听器。
-// Delete removes a listener.
-func (c *ListenerController) Delete() {
-	id, _ := c.GetInt64("id")
-	db := models.GetDB()
-	if db != nil {
-		if err := db.DeleteListener(id); err != nil {
-			c.Error(err.Error())
-			return
-		}
-	}
-	c.JSONOk(map[string]interface{}{"deleted_id": id})
-}
-
-// Start 通过 C2 引擎启动监听器。
-// Start activates a listener via the C2 engine.
-func (c *ListenerController) Start() {
-	id, _ := c.GetInt64("id")
-	db := models.GetDB()
-	if db == nil {
-		c.Error("Database not initialized")
-		return
-	}
-
-	listener, err := db.GetListener(id)
-	if err != nil {
-		c.Error("Listener not found")
-		return
-	}
-
-	// Convert models.Listener to c2engine.Listener and start it
-	engine := c2engine.GetEngine()
-	engineListener, err := engine.NewListener(
-		listener.ListenAddr,
-		listener.ConnectAddr,
-		listener.Mode,
-		listener.VerifyKey,
-		listener.EncryptSalt,
-		listener.Remark,
-	)
-	if err != nil {
-		c.Error("Failed to create listener: " + err.Error())
-		return
-	}
-
-	if err := c2engine.StartListenerByMode(engineListener); err != nil {
-		c.Error("Failed to start listener: " + err.Error())
-		return
-	}
-
-	log.Printf("[C2] Listener %d started (%s mode) on %s", id, listener.Mode, listener.ListenAddr)
-	c.JSONOk(map[string]interface{}{"started_id": id, "status": "activated"})
-}
-
-// Stop 停用监听器的 C2 路由。
-// Stop deactivates a listener's C2 routes.
-func (c *ListenerController) Stop() {
-	id, _ := c.GetInt64("id")
-
-	engine := c2engine.GetEngine()
-	listener := engine.GetListener(id)
-	if listener != nil {
-		if err := c2engine.StopListenerByMode(listener); err != nil {
-			log.Printf("[C2] Failed to stop listener %d: %v", id, err)
-		}
-	}
-
-	log.Printf("[C2] Listener %d C2 endpoints deactivated", id)
-	c.JSONOk(map[string]interface{}{"stopped_id": id, "status": "deactivated"})
-}
-
-// RegisterListenerC2 为监听器注册 C2 端点。
-// RegisterListenerC2 registers the C2 endpoints for a listener.
-func RegisterListenerC2(listener *models.Listener) {
-	key := listener.VerifyKey
-	if key == "" {
-		key = fmt.Sprintf("vkey_%d", listener.ID)
-	}
-	log.Printf("[C2] Listener %d ready at /c2/l/%d (vkey: %s)", listener.ID, listener.ID, key)
-}
-
-// ============================================================================
-// REST-style action methods (matching original binary frontend paths)
-// Frontend calls: POST /api/listener/{action} with JSON body
-// ============================================================================
-
-// Add 创建新监听器（Post 的别名，对应 /api/listener/add）。
-// Add creates a new listener (alias for Post, matches /api/listener/add).
-func (c *ListenerController) Add() {
-	c.Post()
-}
-
-// Edit 更新监听器（Put 的别名，对应 /api/listener/edit）。
-// Edit updates a listener (alias for Put, matches /api/listener/edit).
-func (c *ListenerController) Edit() {
-	c.Put()
-}
-
-// EditRemark 仅更新备注字段（对应 /api/listener/editremark）。
-// EditRemark updates only the remark/note field (matches /api/listener/editremark).
-func (c *ListenerController) EditRemark() {
-	id, _ := c.GetInt64("id")
-	remark := c.GetString("remark")
-	db := models.GetDB()
-	if db == nil {
-		c.Error("Database not initialized")
-		return
-	}
-	listener, err := db.GetListener(id)
-	if err != nil {
-		c.Error("Listener not found")
-		return
-	}
-	listener.Remark = remark
-	if err := db.UpdateListener(listener); err != nil {
-		c.Error("Failed to update: " + err.Error())
-		return
-	}
-	c.JSONOk(listener)
-}
-
-// Del 删除单个监听器（Delete 的别名，对应 /api/listener/del）。
-// Del deletes a single listener (alias for Delete, matches /api/listener/del).
-func (c *ListenerController) Del() {
-	c.Delete()
-}
-
-// DelList 是原版二进制批量删除的方法名（nTApp6jPzv.(*ListenerController).DelList）；
-// Dellist 为路由别名。
-// DelList is the original binary's method name for batch delete
-// (nTApp6jPzv.(*ListenerController).DelList); Dellist is the router alias.
-func (c *ListenerController) DelList() { c.Dellist() }
-
-// Dellist 按 ID 列表批量删除监听器（对应 /api/listener/dellist）。
-// Dellist deletes multiple listeners by ID list (matches /api/listener/dellist).
-func (c *ListenerController) Dellist() {
-	ids := c.GetStrings("ids")
-	db := models.GetDB()
-	if db == nil {
-		c.Error("Database not initialized")
-		return
-	}
-	var deleted []int64
-	for _, idStr := range ids {
-		var id int64
-		fmt.Sscanf(idStr, "%d", &id)
-		if id > 0 {
-			if err := db.DeleteListener(id); err == nil {
-				deleted = append(deleted, id)
-			}
-		}
-	}
-	c.JSONOk(map[string]interface{}{"deleted": deleted})
-}
-
-// List 返回分页监听器列表（对应 /api/listener/list）。
-// List returns paginated listener list (matches /api/listener/list).
+// List 分页列出监听器（POST /listener/list）。
+// 反编译（0x18ea020）参数：page / pageSize / status / field / order / search / sort；
+// 响应 {"total":N,"items":[...]}，每项含 Id / Mode / Status / OssUrl / Remark / Vkey。
 func (c *ListenerController) List() {
-	c.Get()
+	page := c.JsonGetInt("page")
+	if page < 1 {
+		page = 1
+	}
+	pageSize := c.JsonGetInt("pageSize")
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	status := c.JsonGetInt("status")
+	list, total := engineGetListenerList((page-1)*pageSize, pageSize,
+		c.JsonGetStr("field"), c.JsonGetStr("order"),
+		c.JsonGetStr("search"), c.JsonGetStr("sort"), status)
+	items := make([]map[string]interface{}, 0, len(list))
+	for _, l := range list {
+		items = append(items, map[string]interface{}{
+			"Id":     l.ID,
+			"Mode":   l.Mode,
+			"Status": l.Status,
+			"OssUrl": l.OssUrl,
+			"Remark": l.Remark,
+			"Vkey":   l.Vkey,
+			"Port":   l.Port,
+			"Host":   l.Host,
+			"Proxy":  l.Proxy,
+			"Salt":   l.Salt,
+			"vip":    l.IsVIP,
+		})
+	}
+	c.JsonOkResult(map[string]interface{}{"total": total, "items": items})
+}
+
+// Add 新增监听器（POST /listener/add）。
+// 反编译（0x18ec880）参数：Mode / Vkey / OssUrl / Remark / vip。
+func (c *ListenerController) Add() {
+	l := EngineListener{
+		Mode:   c.JsonGetStr("Mode"),
+		Vkey:   c.JsonGetStr("Vkey"),
+		OssUrl: c.JsonGetStr("OssUrl"),
+		Remark: c.JsonGetStr("Remark"),
+		IsVIP:  c.JsonGetBool("vip"),
+	}
+	if l.Mode == "" {
+		c.JsonErr("mode required")
+		return
+	}
+	if err := engineAddListener(l); err != nil {
+		c.JsonErr("add listener failed: " + err.Error())
+		return
+	}
+	c.JsonOkMessage("ok")
+}
+
+// Edit 编辑监听器（POST /listener/edit）。
+// 反编译（0x18ec280）参数：Id / Mode / Vkey / OssUrl / Remark / vip。
+func (c *ListenerController) Edit() {
+	l := EngineListener{
+		ID:     int64(c.JsonGetInt("Id")),
+		Mode:   c.JsonGetStr("Mode"),
+		Vkey:   c.JsonGetStr("Vkey"),
+		OssUrl: c.JsonGetStr("OssUrl"),
+		Remark: c.JsonGetStr("Remark"),
+		IsVIP:  c.JsonGetBool("vip"),
+	}
+	if l.ID == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	if err := engineEditListener(l); err != nil {
+		c.JsonErr("edit listener failed: " + err.Error())
+		return
+	}
+	c.JsonOkMessage("ok")
+}
+
+// EditRemark 修改监听器备注（POST /listener/editremark）。参数：id / remark。
+func (c *ListenerController) EditRemark() {
+	id := int64(c.JsonGetInt("id"))
+	remark := c.JsonGetStr("remark")
+	if id == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	engineEditListenerRemark(id, remark)
+	c.JsonOkMessage("ok")
+}
+
+// Del 删除监听器（POST /listener/del）。参数：id。
+func (c *ListenerController) Del() {
+	id := int64(c.JsonGetInt("id"))
+	if id == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	engineDelListener(id)
+	c.JsonOkMessage("ok")
+}
+
+// DelList 批量删除监听器（POST /listener/dellist）。参数：id（逗号分隔）。
+func (c *ListenerController) DelList() {
+	ids := c.JsonGetIntList("id")
+	if len(ids) == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	id64 := make([]int64, len(ids))
+	for i, v := range ids {
+		id64[i] = int64(v)
+	}
+	engineDelListeners(id64)
+	c.JsonOkMessage("ok")
+}
+
+// Start 启动监听器（POST /listener/start）。参数：id。
+func (c *ListenerController) Start() {
+	id := int64(c.JsonGetInt("id"))
+	if id == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	engineStartListener(id)
+	c.JsonOkMessage("ok")
+}
+
+// Stop 停止监听器（POST /listener/stop）。参数：id。
+func (c *ListenerController) Stop() {
+	id := int64(c.JsonGetInt("id"))
+	if id == 0 {
+		c.JsonErr("id err")
+		return
+	}
+	engineStopListener(id)
+	c.JsonOkMessage("ok")
 }

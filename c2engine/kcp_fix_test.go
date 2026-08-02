@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,7 +40,9 @@ func (c *testKCPClient) writeFrame(msgType LinkMsgType, payload []byte) error {
 	lenBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(lenBuf, uint16(len(msg)))
 	c.sess.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_, err := c.sess.Write(append(lenBuf, msg...))
+	frame := append(lenBuf, msg...)
+
+	_, err := c.sess.Write(frame)
 	return err
 }
 
@@ -65,9 +68,10 @@ func (c *testKCPClient) close() { c.sess.Close() }
 // kcp-go client protocol: bare-JSON handshake, check-in response with the
 // client ID, task polling, and result submission (with verify-key auth).
 func TestKCPListenerEndToEnd(t *testing.T) {
-	cfg := &Config{DBPath: "db/data.db"}
+	cfg := &Config{DBPath: filepath.Join(t.TempDir(), "test.db")}
 	e := GetEngine()
 	e.Init(cfg)
+	defer e.Close()
 
 	const vkey = "short" // short key: previously panicked in the [:32] slice
 	kl := NewKCPListener(9000, "127.0.0.1:0", vkey, "")
@@ -86,11 +90,11 @@ func TestKCPListenerEndToEnd(t *testing.T) {
 
 	// 1. Handshake: bare JSON (no length prefix, no type byte).
 	hs, _ := json.Marshal(map[string]interface{}{
-		"verify_key": vkey,
-		"hostname":   "e2e-host",
-		"username":   "e2e-user",
-		"os":         "linux",
-		"process":    "agent",
+		"VerifyKey":  vkey,
+		"HostName":   "e2e-host",
+		"UserName":   "e2e-user",
+		"OsName":     "linux",
+		"ProcessName": "agent",
 	})
 	client.sess.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := client.sess.Write(hs); err != nil {
@@ -116,8 +120,8 @@ func TestKCPListenerEndToEnd(t *testing.T) {
 	poll := func() TaskResponse {
 		req, _ := json.Marshal(map[string]interface{}{
 			"type":       "task_poll",
-			"client_id":  cr.ClientID,
-			"verify_key": vkey,
+			"ClientID":  cr.ClientID,
+			"VerifyKey": vkey,
 		})
 		if err := client.writeFrame(LinkMsgMain, req); err != nil {
 			t.Fatalf("task poll write: %v", err)
@@ -173,8 +177,8 @@ func TestKCPListenerEndToEnd(t *testing.T) {
 	// 5. Wrong verify key on task poll must be rejected (no task disclosure).
 	req, _ := json.Marshal(map[string]interface{}{
 		"type":       "task_poll",
-		"client_id":  cr.ClientID,
-		"verify_key": "wrong-key",
+		"ClientID":  cr.ClientID,
+		"VerifyKey": "wrong-key",
 	})
 	if err := client.writeFrame(LinkMsgMain, req); err != nil {
 		t.Fatalf("bad-key poll write: %v", err)
@@ -190,9 +194,10 @@ func TestKCPListenerEndToEnd(t *testing.T) {
 // split into fragments by the agent client and reassembled server-side before
 // being applied as a task result.
 func TestKCPFragmentReassembly(t *testing.T) {
-	cfg := &Config{DBPath: "db/data.db"}
+	cfg := &Config{DBPath: filepath.Join(t.TempDir(), "test.db")}
 	e := GetEngine()
 	e.Init(cfg)
+	defer e.Close()
 
 	kl := NewKCPListener(9001, "127.0.0.1:0", "frag-key", "")
 	if err := kl.Start(); err != nil {
@@ -206,7 +211,7 @@ func TestKCPFragmentReassembly(t *testing.T) {
 	}
 	defer client.close()
 
-	hs, _ := json.Marshal(map[string]interface{}{"verify_key": "frag-key", "hostname": "h", "username": "u", "os": "linux", "process": "a"})
+	hs, _ := json.Marshal(map[string]interface{}{"VerifyKey": "frag-key", "HostName": "h", "UserName": "u", "OsName": "linux", "ProcessName": "a"})
 	client.sess.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := client.sess.Write(hs); err != nil {
 		t.Fatalf("handshake: %v", err)
@@ -232,7 +237,11 @@ func TestKCPFragmentReassembly(t *testing.T) {
 		Status:    "completed",
 		VerifyKey: "frag-key",
 	})
-	const chunk = 60000 / 4 * 3
+	// 原版帧长上限 0x8000（32KB，GetShortLenContent 校验）；分片须 ≤ 上限
+// （减去 _frag/_total/_data JSON 开销）。
+// 帧长须 ≤ 原版 0x8000（32KB）上限：chunk 为原始字节，base64 展开 4/3
+	// （含 2B 长度 + 1B flag + JSON 开销）。
+	const chunk = (0x8000 - 192) * 3 / 4
 	var chunks [][]byte
 	for len(payload) > 0 {
 		n := len(payload)
@@ -270,9 +279,10 @@ func TestKCPFragmentReassembly(t *testing.T) {
 // real check-in path (engine.NewClient), keyed by verify key so a fresh client
 // ID cannot bypass it.
 func TestEngineBlockedKeyRejectsCheckin(t *testing.T) {
-	cfg := &Config{DBPath: "db/data.db"}
+	cfg := &Config{DBPath: filepath.Join(t.TempDir(), "test.db")}
 	e := GetEngine()
 	e.Init(cfg)
+	defer e.Close()
 
 	e.BlockKey("banned-key")
 	defer e.UnblockKey("banned-key")

