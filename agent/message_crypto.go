@@ -170,3 +170,32 @@ func msgDualBlockEncrypt(input []byte, rbx uint64, len_ uint16, key0, key2 []byt
 	copy(out[:], x2[:8])
 	return out
 }
+
+// Message frame: [16B IV][21B ct]; keystream = dual-block chain (rolling window).
+// Encrypt a 21B plaintext block: three dual-block calls produce 8+8+5 bytes.
+// This is the register-message path (37B = 16 IV + 21 ct).
+// Parameters rbx/key0/key2 are session-derived (runtime constants).
+
+// msgKeyStream derives the 21B keystream for a 21B plaintext using the
+// dual-block cipher with a rolling 16B window (CBC chain verified vs gdb).
+// Block n input = [block n-1 input[8:16]][block n-1 output] (rolling).
+func msgKeyStream(pt []byte, rbx uint64, key0, key2 []byte) []byte {
+	ks := make([]byte, 0, 21)
+	buf := make([]byte, 21)
+	copy(buf[0:16], pt[0:16])
+	copy(buf[16:21], pt[16:21])
+	var prevIn8 [8]byte
+	var prevOut [8]byte
+	for i := 0; len(ks) < 21; i++ {
+		out := msgDualBlockEncrypt(buf, rbx+uint64(i), 21, key0, key2)
+		ks = append(ks, out[:]...)
+		prevIn8 = [8]byte(buf[8:16])
+		prevOut = out
+		copy(buf[0:8], prevIn8[:])
+		copy(buf[8:16], prevOut[:])
+	}
+	if len(ks) > 21 {
+		ks = ks[:21]
+	}
+	return ks
+}
