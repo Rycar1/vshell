@@ -128,7 +128,8 @@ go build -ldflags "\
 - Agent 配置 JSON：`{server,type,vkey,proxy,salt,l,e,d,h}` 全捕获
 - **消息帧结构**：`[16B IV][21B ct]` = 37B；PT = JSON 直接（`{"VerifyKey":"0l...`）
 - **counter 结构**：`[rbx 运行时常量][len 0x0015×4 广播]`；state = counter XOR key
-- **消息加密算法（0x458f00）完全破解**（session 533，gdb XMM 追踪）：state=aesenc(ctr^key)、3×aesenc 自密钥、双块路径、CBC 链——字节级验证；Go 实现见 `agent/message_crypto.go`
+- **消息加密算法（0x458f00）完全破解**（session 533，gdb XMM 追踪）：state=aesenc(ctr^key)、3×aesenc 自密钥、双块路径、CBC 链——字节级验证；Go 实现见 `agent/message_crypto.go`。后续 gdb（session 535）显示 0x458f00 的 `rcx=0x15` 调用实际是 garble 字符串解密；消息加密循环经函数指针分派，尚未静态定位。块密码本身与 gdb XMM 捕获字节级一致。
+- 线帧模块 `agent/message_wire.go`：`<u32 LE len><[16B IV][ct]>`，ct = payload XOR 密钥流（msgKeyStream）；IV 每消息独立。注意：解密方向尚未逆出——已恢复的密钥流依赖明文（CBC 链输入），服务器侧解密仍待解决。
 - 服务器 AES-128（FUN_0053a1e0）实现验证 roundtrip；T 表 = 标准 Td0 字节交换变体
 - Channel/隧道对象（会话 230-237）、Client 结构体（22 字段 @ 0x1bb9580）、Checkin 链全部解码
 
@@ -138,7 +139,8 @@ go build -ldflags "\
 |---|---|---|
 | **0x458f00 精确轮结构** | **已破解**（session 533）：counter=[rbx LE][len 广播]；state=aesenc(ctr^key)；3×aesenc 自密钥；21B 走双块路径；CBC 链——与 gdb XMM 捕获字节级验证 | 完成 |
 | **Agent 999 函数全量映射** | ~60+ 函数已映射（架构框架 + 加密链）；剩余 ~930 逐函数对齐反编译 | 多周规模 |
-| **Agent 源码对齐** | `agent/main.go`（1607 行）为早期未对齐版本；实际加密 = 自定义链（非标准 AES-GCM） | 高 |
+| **Agent 源码对齐** | `agent/main.go`（1607 行）为早期未对齐版本；实际加密 = 自定义链（非标准 AES-GCM）。`message_crypto.go`（0x458f00 链，字节级验证）+ `message_wire.go`（u32-LE 帧）已落地；KCP 传输仍用 2B-BE + 类型字节帧 | 高 |
+| **消息解密方向** | 密钥流 = msgKeyStream(pt) 依赖明文（CBC 链）；服务器侧逆实现尚未推导 | 高 |
 | **serT 状态机字符串** | FUN_017019c0 深加密，已放弃静态解 | 极高 |
 | **226B 解密 stub** | FUN_011a02e0/01564720 静态求解受阻 | 高 |
 | **DNS 注册完整闭环** | 需消息帧解密完成后验证 | 中 |
