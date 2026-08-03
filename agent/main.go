@@ -1502,6 +1502,10 @@ func main() {
 		transport = newDNSTransport(addr)
 	case "kcp":
 		transport = newKCPTransport(addr)
+	case "tcp", "raw":
+		// Pooled TCP transport aligned to FUN_00fc7560/FUN_00fc9de0
+		// (message_wire.go frame encryption + <u32 LE len> header).
+		transport = newRealTransport(addr, VerifyKey, EncryptSalt)
 	case "wss", "https":
 		if !strings.HasPrefix(addr, "https") {
 			addr = "https://" + addr
