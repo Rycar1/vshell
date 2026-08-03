@@ -128,6 +128,7 @@ Listeners are created dynamically through the web panel API (`c2engine.NewListen
 - Agent config JSON: `{server,type,vkey,proxy,salt,l,e,d,h}` fully captured
 - **Message frame**: `[16B IV][21B ct]` = 37B; PT = JSON direct (`{"VerifyKey":"0l...`)
 - **Counter structure**: `[rbx runtime const][len 0x0015×4 broadcast]`; state = counter XOR key
+- **Message cipher (0x458f00) fully recovered** (session 533, gdb XMM tracing): state=aesenc(ctr^key), 3x self-keyed aesenc, dual-block path, CBC chain — byte-verified; Go impl in `agent/message_crypto.go`
 - Server AES-128 (FUN_0053a1e0) implemented and roundtrip-verified; T-table = std Td0 byte-swapped variant
 - Channel/tunnel objects (sessions 230-237), Client struct (22 fields @ 0x1bb9580), checkin chain fully decoded
 
@@ -135,7 +136,7 @@ Listeners are created dynamically through the web panel API (`c2engine.NewListen
 
 | Item | Status | Difficulty |
 |---|---|---|
-| **0x458f00 exact round-structure rebuild** | 3×aesenc self-keyed chain output ≠ keystream; missing input-window/mask semantics. Frame structure confirmed; last piece | High (runtime round order) |
+| **0x458f00 exact round-structure** | **SOLVED** (session 533): counter=[rbx LE][len x4]; state=aesenc(ctr^key); 3x self-keyed aesenc; dual-block path for 21B; CBC chain — byte-verified vs gdb XMM captures | Done |
 | **Agent 999-function full mapping** | ~60+ functions mapped (architecture skeleton + crypto chain); ~930 remaining | Multi-week |
 | **Agent source alignment** | `agent/main.go` (1607 lines) is an early unaligned version; real crypto = custom chain (not std AES-GCM) | High |
 | **serT state-machine strings** | FUN_017019c0 deeply encrypted; static solving abandoned | Very high |
