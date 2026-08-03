@@ -138,8 +138,8 @@ Listeners are created dynamically through the web panel API (`c2engine.NewListen
 | Item | Status | Difficulty |
 |---|---|---|
 | **0x458f00 exact round-structure** | **SOLVED** (session 533): counter=[rbx LE][len x4]; state=aesenc(ctr^key); 3x self-keyed aesenc; dual-block path for 21B; CBC chain — byte-verified vs gdb XMM captures | Done |
-| **Agent 999-function full mapping** | ~60+ functions mapped (architecture skeleton + crypto chain); ~930 remaining | Multi-week |
-| **Agent source alignment** | `agent/main.go` (1607 lines) is an early unaligned version; real crypto = custom chain (not std AES-GCM). `message_crypto.go` (0x458f00 chain, byte-verified) + `message_wire.go` (u32-LE frame) landed; KCP transport still uses 2B-BE + type-byte framing | High |
+| **Agent 999-function full mapping** | **546 functions mapped** (`.re/decomp/agent_map_*.txt`): full pipeline decoded — main state machine 0xfb1440 → decode → expression engine → executor (182-opcode 0x101df40 + 0x155-opcode 0x10f3220) → 24B frame builder → transport (pooled conn 0xfc7560) → session CRUD → result send. Architecture: `.re/AGENT_ARCHITECTURE.md` | Substantial |
+| **Agent source alignment** | `agent/main.go` (1607 lines) is an early unaligned version; real crypto = custom chain (not std AES-GCM). `message_crypto.go` (0x458f00 chain, byte-verified) + `message_wire.go` (u32-LE frame) + `transport_real.go` (pooled TCP, FUN_00fc7560/00fc9de0) landed; main.go now dispatches 'tcp'/'raw' to the aligned transport. Command/terminal/screen paths remain re-implemented | High |
 | **Message decrypt direction** | keystream = msgKeyStream(pt) depends on plaintext (CBC chain); server-side reversal not yet derived | High |
 | **serT state-machine strings** | FUN_017019c0 deeply encrypted; static solving abandoned | Very high |
 | **226B decrypt stub** | FUN_011a02e0/01564720 static solve blocked | High |

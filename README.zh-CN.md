@@ -138,8 +138,8 @@ go build -ldflags "\
 | 项 | 状态 | 难度 |
 |---|---|---|
 | **0x458f00 精确轮结构** | **已破解**（session 533）：counter=[rbx LE][len 广播]；state=aesenc(ctr^key)；3×aesenc 自密钥；21B 走双块路径；CBC 链——与 gdb XMM 捕获字节级验证 | 完成 |
-| **Agent 999 函数全量映射** | ~60+ 函数已映射（架构框架 + 加密链）；剩余 ~930 逐函数对齐反编译 | 多周规模 |
-| **Agent 源码对齐** | `agent/main.go`（1607 行）为早期未对齐版本；实际加密 = 自定义链（非标准 AES-GCM）。`message_crypto.go`（0x458f00 链，字节级验证）+ `message_wire.go`（u32-LE 帧）已落地；KCP 传输仍用 2B-BE + 类型字节帧 | 高 |
+| **Agent 999 函数全量映射** | **546 函数已映射**（`.re/decomp/agent_map_*.txt`）：完整管线解码——主状态机 0xfb1440 → 解码 → 表达式引擎 → 执行器（182-opcode 0x101df40 + 0x155-opcode 0x10f3220）→ 24B 帧构建 → 传输（池化连接 0xfc7560）→ 会话 CRUD → 结果发送。架构文档：`.re/AGENT_ARCHITECTURE.md` | 大量 |
+| **Agent 源码对齐** | `agent/main.go`（1607 行）为早期未对齐版本；实际加密 = 自定义链（非标准 AES-GCM）。`message_crypto.go`（0x458f00 链，字节级验证）+ `message_wire.go`（u32-LE 帧）+ `transport_real.go`（池化 TCP，FUN_00fc7560/00fc9de0）已落地；main.go 现可经 'tcp'/'raw' 模式走对齐传输。命令/终端/屏幕路径仍为重建实现 | 高 |
 | **消息解密方向** | 密钥流 = msgKeyStream(pt) 依赖明文（CBC 链）；服务器侧逆实现尚未推导 | 高 |
 | **serT 状态机字符串** | FUN_017019c0 深加密，已放弃静态解 | 极高 |
 | **226B 解密 stub** | FUN_011a02e0/01564720 静态求解受阻 | 高 |
