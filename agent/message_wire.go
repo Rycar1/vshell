@@ -56,12 +56,22 @@ func newIV() [16]byte {
 // plaintext input as recovered from the binary's CBC chain); see README.
 func encryptFrame(sk *sessionKeys, counter *messageCounter, payload []byte) []byte {
 	rbx := counter.next()
-	ks := msgKeyStream(payload, rbx, sk.key0[:], sk.key2[:])
 	iv := newIV()
 	frame := make([]byte, 16+len(payload))
 	copy(frame[:16], iv[:])
-	for i := 0; i < len(payload); i++ {
-		frame[16+i] = payload[i] ^ ks[i]
+	// Process payload in 21B blocks: msgKeyStream derives a 21B keystream per
+	// block (rolling dual-block chain, gdb verified). Short tail padded.
+	for off := 0; off < len(payload); off += 21 {
+		end := off + 21
+		if end > len(payload) {
+			end = len(payload)
+		}
+		ksIn := make([]byte, 21)
+		copy(ksIn, payload[off:end])
+		ks := msgKeyStream(ksIn, rbx+uint64(off/21), sk.key0[:], sk.key2[:])
+		for i := 0; i < end-off; i++ {
+			frame[16+off+i] = payload[off+i] ^ ks[i]
+		}
 	}
 	out := make([]byte, 4+len(frame))
 	binary.LittleEndian.PutUint32(out[:4], uint32(len(frame)))
