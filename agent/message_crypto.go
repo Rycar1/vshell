@@ -111,3 +111,62 @@ func msgBlockEncrypt(input []byte, rbx uint64, key []byte) [8]byte {
 	copy(out[:], x1[:8])
 	return out
 }
+
+// msgDualBlockEncrypt implements the 0x458fb7 dual-block path (0x10 < len <= 0x20):
+//
+//	state0 = aesenc(counter XOR key0)        (entry, key@0xbb20e0)
+//	state2 = aesenc(counter XOR key2)        (this path, key2@0xbb20f0)
+//	xmm2   = input[0:16]  XOR state0
+//	xmm3   = input[len-16:len] XOR state2
+//	both 3x aesenc self-keyed, then xmm2 ^= xmm3
+//	out    = low 8 bytes
+func msgDualBlockEncrypt(input []byte, rbx uint64, len_ uint16, key0, key2 []byte) [8]byte {
+	// counter = [rbx LE][len x4]
+	var ctr [16]byte
+	for i := 0; i < 8; i++ {
+		ctr[i] = byte(rbx >> (8 * i))
+	}
+	for i := 0; i < 4; i++ {
+		ctr[8+2*i] = byte(len_ & 0xff)
+		ctr[9+2*i] = byte((len_ >> 8) & 0xff)
+	}
+	var k0, k2 [16]byte
+	copy(k0[:], key0)
+	copy(k2[:], key2)
+	// state0 = aesenc(counter XOR key0)
+	var x0 [16]byte
+	for i := 0; i < 16; i++ {
+		x0[i] = ctr[i] ^ k0[i]
+	}
+	state0 := aesRound(x0, x0)
+	// state2 = aesenc(counter XOR key2)
+	var x1 [16]byte
+	for i := 0; i < 16; i++ {
+		x1[i] = ctr[i] ^ k2[i]
+	}
+	state2 := aesRound(x1, x1)
+	// xmm2 = input[0:16] XOR state0
+	var x2 [16]byte
+	copy(x2[:], input[:16])
+	for i := 0; i < 16; i++ {
+		x2[i] ^= state0[i]
+	}
+	// xmm3 = input[len-16:len] XOR state2
+	var x3 [16]byte
+	copy(x3[:], input[len_-16:len_])
+	for i := 0; i < 16; i++ {
+		x3[i] ^= state2[i]
+	}
+	x2 = aesRound(x2, x2)
+	x2 = aesRound(x2, x2)
+	x2 = aesRound(x2, x2)
+	x3 = aesRound(x3, x3)
+	x3 = aesRound(x3, x3)
+	x3 = aesRound(x3, x3)
+	for i := 0; i < 16; i++ {
+		x2[i] ^= x3[i]
+	}
+	var out [8]byte
+	copy(out[:], x2[:8])
+	return out
+}

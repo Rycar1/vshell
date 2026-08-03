@@ -38,3 +38,19 @@ func TestMsgBlockEncryptVar(t *testing.T) {
 		t.Fatalf("3x chain: got %s want %s", got, want)
 	}
 }
+
+func TestMsgDualBlockEncrypt(t *testing.T) {
+	// Same-run capture: rbx=0x99ef22fc, key0=fbab53e46c9bdfbacf15442e994e8864
+	// key2=7005f0daf94c9f93c460659701d884e3, in="Anatolian_Hieroglyphs"
+	// FIN low 8 = b1b5a467fd784088 (verified by C AES-NI)
+	key0, _ := hex.DecodeString("fbab53e46c9bdfbacf15442e994e8864")
+	key2, _ := hex.DecodeString("7005f0daf94c9f93c460659701d884e3")
+	input := []byte("Anatolian_Hieroglyphs")
+	if len(input) != 21 {
+		t.Fatalf("input len %d want 21", len(input))
+	}
+	got := msgDualBlockEncrypt(input, 0x99ef22fc, 21, key0, key2)
+	if hex.EncodeToString(got[:]) != "b1b5a467fd784088" {
+		t.Fatalf("dual: got %s", hex.EncodeToString(got[:]))
+	}
+}
