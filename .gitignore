@@ -102,6 +102,9 @@ license.txt
 agent_*
 !agent/
 
+# --- RE working notes (private) ---
+.re/
+
 # --- Large RE memory dumps (regenerable) ---
 .re/mem_strings_*.txt
 .re/*.bin
