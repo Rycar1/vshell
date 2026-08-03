@@ -1092,6 +1092,13 @@ func parseKV(s string, fn func(k, v string)) {
 	}
 }
 
+// executeCommand executes a task command. ALIGNMENT: the original binary's
+// task-execute dispatcher is FUN_010952e0 (0x10952e0, 30-case switch 0x0-0x2a,
+// 98KB decompile in .re/decomp/agent_map_10952e0.txt): interval get/set (0x0),
+// sleep mode (0x2), session/process list dumps (0xe/0x15), config-key
+// enumeration (0x1f), ping/pong (0x1a), destroy (0x22). This Go reimplementation
+// covers the shell/screen/terminal subset; the full 43-case matrix maps to
+// frames emitted via FUN_0100d160/FUN_0100d440/FUN_0100d5e0.
 func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 	// Interactive terminal commands are dispatched as plain (non-JSON) strings
 	// by the web panel's terminal relay. Handle them before the JSON parse.
