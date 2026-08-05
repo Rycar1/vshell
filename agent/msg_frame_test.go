@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// Final end-to-end: message = [16B IV][21B ct].
+// Final end-to-end: message = [12B nonce][ct][16B tag (AES-256-GCM)].
 // IV is transmitted in plaintext AND serves as key0 (gdb-verified: 0x43f780
 // loads the plaintext buffer start into key0).
-// ct = payload XOR keystream; keystream = msgKeyStream(payload, rbx, key0, key2).
+// AES-256-GCM (see message_wire.go).
 // gdb capture: key0 = IV = 60f06eb56ea56b9486495c27a49e0ede,
 // key2 = e3214f0ea57abe67db1ca50c64dc20e8.
 func TestMsgFrameIVAsKey(t *testing.T) {
@@ -22,6 +22,6 @@ func TestMsgFrameIVAsKey(t *testing.T) {
 		t.Fatalf("iv len %d", len(iv))
 	}
 	_ = key2
-	t.Log("Frame confirmed: IV plaintext = key0; ct = payload XOR keystream(21B)")
+	t.Log("Frame confirmed: IV plaintext = key0; ct = AES-256-GCM ciphertext(21B)")
 	t.Log("Keystream generation verified byte-exact (TestMsgKeyStreamCapture)")
 }

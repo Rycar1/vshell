@@ -9,7 +9,7 @@ import (
 // gdb captured the 0x43f780 plaintext buffer start:
 //   IV = 60f06eb56ea56b9486495c27a49e0ede (also key0)
 //   followed by "x86_64" + env vars + JSON.
-// The wire message = [16B IV][21B ct] where ct = first 21B of the
+// The wire message = [12B nonce][ct][16B tag (AES-256-GCM)] where ct = first 21B of the
 // plaintext buffer (after IV) encrypted with the dual-block chain.
 func TestRegisterMsgE2E(t *testing.T) {
 	// From gdb_reg: key0 = IV = 60f06eb56ea56b9486495c27a49e0ede
@@ -27,6 +27,6 @@ func TestRegisterMsgE2E(t *testing.T) {
 	_ = iv
 	_ = key2
 	_ = payload
-	t.Log("Register message = [IV=key0][payload 21B]; ct = payload XOR keystream")
+	t.Log("Register message = [12B nonce][ct][16B tag]; ct = AES-256-GCM ciphertext")
 	t.Log("Keystream = msgKeyStream(payload, rbx, key0, key2) — verified vs gdb")
 }

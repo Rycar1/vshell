@@ -5,10 +5,14 @@ import (
 	"testing"
 )
 
-// Verify msgKeyStream against a full gdb capture:
+// Verify msgKeyStream (0x458f00 garble field-name decryption engine)
+// against a full gdb capture:
 // rbx=0x956da0e7, key0=6b66a71f83903f3b4710206d6df90554,
 // key2=a6c75adda0e09cfa1349fd7fae59006c, pt="WSL2_GUI_APPS_ENABLED"
 // first dual-block output = 2dff7e68a76efb8f (gdb FIN low 8)
+// NOTE: 0x458f00 is the garble string/field-name decryption engine, NOT
+// the message-frame cipher (frames are AES-256-GCM, see message_wire.go).
+// This test verifies the 0x458f00 algorithm reconstruction byte-exactly.
 func TestMsgKeyStreamCapture(t *testing.T) {
 	key0, _ := hex.DecodeString("6b66a71f83903f3b4710206d6df90554")
 	key2, _ := hex.DecodeString("a6c75adda0e09cfa1349fd7fae59006c")
