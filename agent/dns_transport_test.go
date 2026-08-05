@@ -36,6 +36,36 @@ func TestDNSBase32Encode(t *testing.T) {
 	}
 }
 
+// dnsEncodeEndpoint encodes the c2 hostname for the DNS channel:
+// ChaCha20-XOR then base62 transform. Verify length/structure invariants.
+func TestDNSEndpointEncode(t *testing.T) {
+	key := dnsChaCha20Key("testvkey", "salt")
+	host := []byte("c2.test.local1234") // 15B
+	out, err := dnsEncodeEndpoint(key, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 15B host + NUL terminator
+	if len(out) != 16 {
+		t.Fatalf("endpoint len %d, want 16", len(out))
+	}
+	if out[len(out)-1] != 0 {
+		t.Fatalf("missing NUL terminator")
+	}
+	// base62 chars only
+	for _, c := range out[:15] {
+		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
+			t.Fatalf("non-base62 char %q", c)
+		}
+	}
+	// deterministic
+	out2, _ := dnsEncodeEndpoint(key, host)
+	if string(out) != string(out2) {
+		t.Fatal("not deterministic")
+	}
+	t.Logf("endpoint = %q", out[:15])
+}
+
 func padding(enc string) string {
 	return strings.Repeat("=", (8-len(enc)%8)%8)
 }

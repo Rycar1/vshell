@@ -19,6 +19,10 @@ import (
 //	             on rgst/conf/main prefixes; see DNS_REGISTER_PROBES.md)
 //	command    = "rgst:" | "conf:" | "main:"
 //
+// Endpoint resolve (0xfc90e0): the c2 hostname itself is encoded for the
+// DNS channel as ChaCha20-XOR 15B + base62 alphabet transform (DAT_1e491c80)
+// before dialing — see dnsEncodeEndpoint.
+//
 // The server DNS listener (0.0.0.0:5300/5301) base32-decodes the label and
 // dispatches on the command prefix (verified by server logs: "base32
 // decoding", "Incorrect domain", command dispatch).
@@ -89,5 +93,35 @@ func chacha20XOR(key, data []byte) ([]byte, error) {
 	}
 	out := make([]byte, len(data))
 	c.XORKeyStream(out, data)
+	return out, nil
+}
+
+// dnsBase62Alphabet mirrors DAT_1e491c80 (agent 0xfc90e0): a 0x3e-entry
+// alphabet used by the base-62 transform. b' = tbl[b] for b<0x3e, else
+// wraps via tbl[b + ((b>>1)/0x1f)*(-0x3e)] (i.e. tbl[b & 0x3f]).
+var dnsBase62Alphabet = []byte(
+	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+)
+
+// dnsEncodeEndpoint encodes the c2 hostname for the DNS channel
+// (agent 0xfc90e0): ChaCha20-XOR 15 bytes (keyed by the shared cipher
+// state), then a per-byte base62 transform, NUL-terminated.
+func dnsEncodeEndpoint(key []byte, host []byte) ([]byte, error) {
+	if len(host) > 15 {
+		host = host[:15]
+	}
+	x, err := chacha20XOR(key, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(x)+1)
+	for _, b := range x {
+		idx := int(b) & 0x3f
+		if idx >= len(dnsBase62Alphabet) {
+			idx = len(dnsBase62Alphabet) - 1
+		}
+		out = append(out, dnsBase62Alphabet[idx])
+	}
+	out = append(out, 0)
 	return out, nil
 }
