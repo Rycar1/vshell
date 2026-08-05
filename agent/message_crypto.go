@@ -1,7 +1,7 @@
 package main
 
-// messageCrypto implements the VShell message-block cipher recovered from
-// the agent binary 0x458f00 (verified byte-exact against gdb captures):
+// messageCrypto implements the binary's 0x458f00 garble string/field-name
+// decryption engine (verified byte-exact against gdb captures):
 //
 //	counter = [rbx u64 LE][len 0x0010 x4 broadcast]
 //	state   = AESRound(counter XOR key)          // 1 self-keyed round
@@ -9,9 +9,11 @@ package main
 //	xmm1    = AESRound(xmm1, xmm1) x3            // self-keyed
 //	out     = low 8 bytes of xmm1
 //
-// Message frame: [16B IV][21B ct]; keystream = CBC chain of block outputs.
-// Self-keyed AESRound means the round key equals the current state, which is
-// NOT standard AES key expansion — it is a custom construction.
+// IMPORTANT: 0x458f00 is NOT the message-frame cipher. gdb showed all
+// call sites use rdx=0x8e2240 (garble string table) with JSON field-name
+// inputs ("Id", "IsConnect", "VerifyKey", ...) — it decrypts obfuscated
+// field names at runtime. Message frames are AES-256-GCM (message_wire.go).
+// These functions remain for historical/verification value only.
 
 // aesRound performs one AES round: SubBytes, ShiftRows, MixColumns, AddRoundKey.
 // State is column-major (byte i = col i/4, row i%4), matching AES-NI.

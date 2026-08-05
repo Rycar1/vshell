@@ -36,14 +36,11 @@ func TestFoldCompare(t *testing.T) {
 	}
 }
 
-func TestDeriveSessionKeys(t *testing.T) {
-	sk := deriveSessionKeys("testvkey", "salt")
-	if sk.key0 == sk.key2 {
-		t.Fatal("key0 must differ from key2")
+func TestMessageFrameKey(t *testing.T) {
+	if string(msgFrameKey) != "ceb20772e0c9d240c75eb26b0e37abee" {
+		t.Fatalf("msgFrameKey = %q", msgFrameKey)
 	}
-	sk2 := deriveSessionKeys("testvkey", "salt")
-	if sk.key0 != sk2.key0 || sk.key2 != sk2.key2 {
-		t.Fatal("derivation must be deterministic")
+	if len(msgFrameKey) != 32 {
+		t.Fatalf("key len %d, want 32", len(msgFrameKey))
 	}
-	t.Logf("key0=%x key2=%x", sk.key0, sk.key2)
 }

