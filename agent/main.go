@@ -402,19 +402,24 @@ func (t *kcpTransport) connect() error {
 const maxKCPFrame = 60000
 
 // writeFrame 发送类型化、长度前缀消息（链路协议）。
+// 消息体经 AES-256-GCM 帧加密（与 TCP 消息帧同 key/格式，服务器统一
+// GCM Open 解密）。
 // writeFrame sends a typed, length-prefixed message (link protocol).
+// The payload is wrapped in the AES-256-GCM message frame (same key/
+// format as TCP frames; the server GCM-opens every inbound frame).
 func (t *kcpTransport) writeFrame(msgType byte, data []byte) error {
 	if t.sess == nil {
 		if err := t.connect(); err != nil {
 			return err
 		}
 	}
-	if len(data)+1 > maxKCPFrame {
+	enc := encryptFrame(data)
+	if len(enc)+1 > maxKCPFrame {
 		return t.writeFragmented(data)
 	}
-	msg := make([]byte, 1+len(data))
+	msg := make([]byte, 1+len(enc))
 	msg[0] = msgType
-	copy(msg[1:], data)
+	copy(msg[1:], enc)
 
 	lenBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(lenBuf, uint16(len(msg)))
@@ -468,8 +473,10 @@ func (t *kcpTransport) writeFragmented(data []byte) error {
 }
 
 // readFrame 读取一条类型化、长度前缀消息，跳过服务器心跳（服务器每 10 秒推送 LinkMsgHealth）。
+// 消息体经 AES-256-GCM 帧解密。
 // readFrame reads one typed, length-prefixed message, skipping server
 // heartbeats (the server pushes LinkMsgHealth every 10s on its own).
+// The payload is GCM-opened (same frame format as TCP).
 func (t *kcpTransport) readFrame() (byte, []byte, error) {
 	if t.sess == nil {
 		return 0, nil, io.ErrClosedPipe
@@ -491,7 +498,11 @@ func (t *kcpTransport) readFrame() (byte, []byte, error) {
 		if data[0] == linkMsgHealth {
 			continue
 		}
-		return data[0], data[1:], nil
+		pt, err := decryptFrame(data[1:])
+		if err != nil {
+			return 0, nil, err
+		}
+		return data[0], pt, nil
 	}
 }
 
