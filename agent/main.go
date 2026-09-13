@@ -1851,11 +1851,47 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 	case opCmdIfList:
 		// 原版 dec case 0x12：按名字命中接口后 FUN_01076f60 起帧，逐项下发
 		// 3 字段记录（序号/地址/名称），必要时再补 4 字段记录。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		//
+		// 与本机可复现（同 netRoute/proclist）：接口是本机事实，
+		// 用 net.Interfaces 枚举即可；仅字段名与标签取自池（不可读）。
+		// ⚠ 偏差：下发本机接口，字段文本为复刻端固定值。
+		ifaces, err := net.Interfaces()
+		if err != nil || len(ifaces) == 0 {
+			return "", "iflist: no interfaces available"
+		}
+		n := 0
+		for i, f := range ifaces {
+			addr := ""
+			if as, err := f.Addrs(); err == nil && len(as) > 0 {
+				addr = as[0].String()
+			}
+			// 原版 3 字段记录：序号 / 地址 / 名称
+			emitFrames([]resultFrame{{Kind: 0x47, A: uint32(i), B: uint32(len(addr))}})
+			emitStringFrames(addr)
+			emitStringFrames(f.Name)
+			n++
+		}
+		return fmt.Sprintf("iflist %d", n), ""
 
 	case opCmdIfDetail:
-		// 原版 dec case 0x13：命中接口后逐项下发 5 字段记录（名称/标志/类型/ID/值）。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 原版 dec case 0x13：命中接口后逐项下发 5 字段记录
+		// （名称/标志/类型/ID/值）。
+		//
+		// 同 iflist：接口信息是本机事实，可从 net.Interface 直接得到
+		// （名称、Flags、MTU、HardwareAddr）。字段名不可读，标为偏差。
+		ifaces, err := net.Interfaces()
+		if err != nil || len(ifaces) == 0 {
+			return "", "ifdetail: no interfaces available"
+		}
+		n := 0
+		for _, f := range ifaces {
+			emitStringFrames(f.Name)
+			// 标志位（net.Flags 的位模式）与类型/MTU/硬件地址
+			emitFrames([]resultFrame{{Kind: 0x47, A: uint32(f.Flags), B: uint32(f.MTU)}})
+			emitStringFrames(f.HardwareAddr.String())
+			n++
+		}
+		return fmt.Sprintf("ifdetail %d", n), ""
 
 	case opCmdProxyList:
 		// 原版 dec case 0x14：遍历 [local_280+0x248] 链表，每条用

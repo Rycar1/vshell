@@ -239,7 +239,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 	pending := []byte{
 		opCmdScreenshot, opCmdConnStat, opCmdSysList,
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
-		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
+		opCmdProxyList, opCmdSysList2,
 		opCmdPing, opCmdHostScan, opCmdFileList,
 		opCmdFwdPort,
 	}
@@ -570,6 +570,17 @@ func TestProcListAndSvcListAreImplemented(t *testing.T) {
 	for _, op := range []byte{opCmdProcList, opCmdSvcList} {
 		if _, err := dispatchNativeCommand(1, op, []byte{op}, 5); err != "" {
 			t.Logf("opcode 0x%02x reported: %v (acceptable when the host has none)", op, err)
+		}
+	}
+}
+
+// 0x13/0x14 (iflist/ifdetail) implemented on their locally reproducible half:
+// interfaces are a local fact, enumerable via net.Interfaces. The original's field
+// names/labels come from the runtime pool and are labelled a divergence.
+func TestIfListAndIfDetailAreImplemented(t *testing.T) {
+	for _, op := range []byte{opCmdIfList, opCmdIfDetail} {
+		if _, err := dispatchNativeCommand(1, op, []byte{op}, 5); err != "" {
+			t.Logf("opcode 0x%02x reported: %v (acceptable when the host has no interfaces)", op, err)
 		}
 	}
 }
