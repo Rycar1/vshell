@@ -6,7 +6,7 @@ import (
 )
 
 // Full message decryption: message frame = [12B nonce][ct][16B tag],
-// AES-256-GCM (key = "ceb20772e0c9d240c75eb26b0e37abee").
+// AES-256-GCM (key = hex(md5(listener EncryptSalt)), see message_wire.go).
 // Same-run captured frame (session 365) decrypts to the version message.
 func TestMsgDecryptRegister(t *testing.T) {
 	// 37B version frame (breakthrough same-run capture):

@@ -1,37 +1,69 @@
 package main
 
-import (
-	"encoding/hex"
-	"testing"
-)
+import "testing"
 
-// End-to-end: encrypt a 21B plaintext with the dual-block chain, producing
-// the 21B ciphertext that matches the wire format [16B IV][21B ct].
-// Verified against the same-run tuple: PT = {"VerifyKey":"0l...,
-// ct = 0790f78ff38255b11eb2faa81c2a7241e4b7f77288, keystream = 7cb2a1ea81eb33c8...
-func TestMsgEncryptChain(t *testing.T) {
-	// Known same-run data:
-	//   PT  = {"VerifyKey":"0ldZAz4ckNLrxULk","Tp":"tcp",...} (JSON, >21B)
-	//   The first 21B of ct = 0790f78ff38255b11eb2faa81c2a7241e4b7f77288
-	//   keystream (16B prefix) = 7cb2a1ea81eb33c855d7838a2608422d
-	//   PT_prefix = ct XOR ks = {"VerifyKey":"0l
-	ct, _ := hex.DecodeString("0790f78ff38255b11eb2faa81c2a7241e4b7f77288")
-	ks := []byte{0x7c, 0xb2, 0xa1, 0xea, 0x81, 0xeb, 0x33, 0xc8,
-		0x55, 0xd7, 0x83, 0x8a, 0x26, 0x08, 0x42, 0x2d}
-	pt := make([]byte, len(ct))
-	for i := 0; i < len(ct); i++ {
-		if i < len(ks) {
-			pt[i] = ct[i] ^ ks[i]
-		} else {
-			pt[i] = ct[i] // tail unknown (needs full 21B keystream)
+// The earlier "[16B IV][21B ct]" keystream model is disproven (see
+// message_wire.go): frames are AES-GCM, [12B nonce][ct][16B tag], with no
+// 21-byte block chunking. This test pins that structural fact: any payload
+// length produces a frame of exactly nonce+len(payload)+tag, and a
+// 21-byte-multiple payload is not split into 21-byte blocks.
+func TestFrameNotChunkedInto21ByteBlocks(t *testing.T) {
+	gcm := newGCM()
+	overhead := gcm.NonceSize() + gcm.Overhead()
+	for _, n := range []int{0, 1, 9, 21, 42, 306} {
+		payload := make([]byte, n)
+		for i := range payload {
+			payload[i] = byte(i)
+		}
+		wire := encryptFrame(payload)
+		if len(wire) != 4+overhead+n {
+			t.Fatalf("payload %d: wire len %d, want %d (4 hdr + %d frame)",
+				n, len(wire), 4+overhead+n, overhead+n)
+		}
+		pt, err := decryptFrame(wire[4:])
+		if err != nil {
+			t.Fatalf("payload %d: decrypt: %v", n, err)
+		}
+		if len(pt) != n {
+			t.Fatalf("payload %d: PT len %d", n, len(pt))
 		}
 	}
-	got := string(pt[:16])
-	if got != `{"VerifyKey":"0l`[:16] {
-		t.Fatalf("PT prefix: got %q", got)
+}
+
+// The conf frame's plaintext header is "conf\x2a\x01\x00\x00" followed by the
+// register JSON (gdb same-run capture, session 537). The captured frame body
+// was 334 bytes with a 306-byte plaintext, i.e. 12 + 306 + 16 — the exact
+// AES-GCM shape.
+func TestConfFrameShape(t *testing.T) {
+	pt := append([]byte("conf\x2a\x01\x00\x00"), []byte(`{"Id":0,"IsConnect":false,"VerifyKey":""}`)...)
+	wire := encryptFrame(pt)
+	if len(wire[4:]) != 12+len(pt)+16 {
+		t.Fatalf("conf frame len %d, want %d", len(wire[4:]), 12+len(pt)+16)
 	}
-	t.Logf("PT[0:16] = %q (register JSON prefix confirmed)", got)
-	// The full 21B keystream requires 3 dual-block outputs (8+8+5).
-	// This test confirms the frame+PT structure; the per-message keys
-	// (rbx/key0/key2) are runtime-derived per session.
+	got, err := decryptFrame(wire[4:])
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(got) != string(pt) {
+		t.Fatalf("conf PT mismatch: %q", got)
+	}
+}
+
+// The "register" message body is plain JSON framed as AES-GCM; the same-run
+// capture showed it beginning {"VerifyKey":"0l... — the earlier 21-byte
+// keystream cipher model is disproven (see message_wire.go).
+func TestRegisterMsgShape(t *testing.T) {
+	const prefix = `{"VerifyKey":"0l`
+	body := []byte(`{"VerifyKey":"0ldZAz4ckNLrxULk","Tp":"tcp","Addr":"127.0.0.1:443"}`)
+	if string(body[:len(prefix)]) != prefix {
+		t.Fatalf("register prefix mismatch: %q", body[:len(prefix)])
+	}
+	wire := encryptFrame(body)
+	pt, err := decryptFrame(wire[4:])
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(pt) != string(body) {
+		t.Fatalf("register round trip mismatch: %q", pt)
+	}
 }

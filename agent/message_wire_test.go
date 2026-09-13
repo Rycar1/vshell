@@ -7,7 +7,8 @@ import (
 )
 
 // Wire frame structure: <u32 LE len><AES-256-GCM frame>.
-// Frame = [12B nonce][ct][16B tag]; key = "ceb20772e0c9d240c75eb26b0e37abee".
+// Frame = [12B nonce][ct][16B tag]; key = hex(md5(salt)) for the listener's
+// EncryptSalt ("salt" in the captured deployment) — see message_wire.go.
 // Verified against same-run gdb captures (37B version frame + 334B conf frame).
 func TestWireFrameGCM(t *testing.T) {
 	payload := make([]byte, 21)
@@ -49,5 +50,25 @@ func TestGCMCapturedFrames(t *testing.T) {
 	t.Logf("version PT = %q", pt)
 	if string(pt) != "\x05\x00\x00\x004.9.3" {
 		t.Fatalf("version PT mismatch: %q", pt)
+	}
+}
+
+// The 334B conf frame from the same run: frame = [12B nonce][306B ct][16B tag]
+// -> PT = "conf\x2a\x01\x00\x00" + register JSON. (The raw ct334.bin capture is
+// not in the repo, so this asserts the shape recovered from it.)
+func TestGCMConfFrameShape(t *testing.T) {
+	pt := make([]byte, 306) // captured conf plaintext length
+	copy(pt, "conf\x2a\x01\x00\x00")
+	wire := encryptFrame(pt)
+	frame := wire[4:]
+	if len(frame) != 334 {
+		t.Fatalf("frame len %d, want 334 (12 nonce + 306 ct + 16 tag)", len(frame))
+	}
+	got, err := decryptFrame(frame)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(got[:5]) != "conf\x2a" {
+		t.Fatalf("conf head mismatch: %q", got[:8])
 	}
 }

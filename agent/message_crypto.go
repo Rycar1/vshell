@@ -13,6 +13,9 @@ package main
 // call sites use rdx=0x8e2240 (garble string table) with JSON field-name
 // inputs ("Id", "IsConnect", "VerifyKey", ...) — it decrypts obfuscated
 // field names at runtime. Message frames are AES-256-GCM (message_wire.go).
+// The 21-byte block size this engine works on comes from the field-name
+// string length, NOT from the wire frame: frames are [12B nonce][ct][16B tag]
+// with no 21-byte chunking (pinned by TestFrameNotChunkedInto21ByteBlocks).
 // These functions remain for historical/verification value only.
 
 // aesRound performs one AES round: SubBytes, ShiftRows, MixColumns, AddRoundKey.

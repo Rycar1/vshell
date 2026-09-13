@@ -37,8 +37,10 @@ func TestFoldCompare(t *testing.T) {
 }
 
 func TestMessageFrameKey(t *testing.T) {
-	if string(msgFrameKey) != "ceb20772e0c9d240c75eb26b0e37abee" {
-		t.Fatalf("msgFrameKey = %q", msgFrameKey)
+	// Recovered key = the lowercase hex text of md5(salt); the captured
+	// deployment's EncryptSalt was "salt" (see message_wire.go for evidence).
+	if got := string(msgFrameKey); got != "ceb20772e0c9d240c75eb26b0e37abee" {
+		t.Fatalf("msgFrameKey = %q", got)
 	}
 	if len(msgFrameKey) != 32 {
 		t.Fatalf("key len %d, want 32", len(msgFrameKey))
