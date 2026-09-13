@@ -241,7 +241,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
 		opCmdNetRoute, opCmdPing, opCmdHostScan, opCmdFileList,
-		opCmdProcList, opCmdSvcList, opCmdSetDomain,
+		opCmdProcList, opCmdSvcList,
 		opCmdFwdPort,
 	}
 	for _, op := range pending {
@@ -517,5 +517,19 @@ func TestTunnelCountIsImplemented(t *testing.T) {
 	}
 	if _, err := dispatchNativeCommand(1, opCmdTunnelCount, []byte(nativeBlock(opCmdTunnelCount, 3)), 5); err != "" {
 		t.Fatalf("tunnelCount set returned error %q", err)
+	}
+}
+
+// 0x28 (setDomain) implemented: the branch's behaviour depends on set/clear/read-
+// back, not on the string's content, so it is implementable even though the
+// original's global holds a runtime-written value. The argument is TEXT (a
+// domain/SNI name), not a 4-byte int block, so it is taken from the raw remainder.
+func TestSetDomainIsImplemented(t *testing.T) {
+	in := append([]byte{opCmdSetDomain}, []byte("example.com")...)
+	if _, err := dispatchNativeCommand(1, opCmdSetDomain, in, 5); err != "" {
+		t.Fatalf("setDomain(set) returned error %q", err)
+	}
+	if _, err := dispatchNativeCommand(1, opCmdSetDomain, []byte{opCmdSetDomain}, 5); err != "" {
+		t.Fatalf("setDomain(query) returned error %q", err)
 	}
 }

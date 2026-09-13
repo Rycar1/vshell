@@ -952,6 +952,8 @@ var (
 	agentSysTimeSet      bool // 原版 dec case 0x19 的「系统时间已设置」标志
 	// agentTunnelCount 对应 dec case 0x23 读写的 local_2a0 记录 +2 字节。
 	agentTunnelCount int
+	// agentDomain 对应 dec case 0x27 的全局 DAT_1e490960（域名/SNI）。
+	agentDomain string
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -1731,8 +1733,16 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return "", ""
 
 	case opCmdConnStat:
-		// 原版 dec case 0x8：把 [local_280+0x290] 链表每个节点的地址串用
-		// FUN_0100d440(1, ...) 逐条下发。复刻端没有该链表（原版的多连接池）。
+		// 原版 dec case 0x8：遍历 [local_280+0x52] 的连接链表，每项用
+		// FUN_0100d440(1, fmt, argv) 下发一条记录。
+		//
+		// 格式串已还原（不再是阻塞点）：0x109c28a `MOV RDI,[0x1e490a08]` +
+		// `ADD RDI,0x4a95` → pool+0x4a95 = "is"（一个整数 + 一个字符串），
+		// 调用点 0x109c2b0 → FUN_0100d440；argv 由记录内的计数器与地址串组成。
+		//
+		// 真正的阻塞点是**数据源**：该链表是原版的连接池，复刻端的连接由
+		// engine 管理、没有等价的节点结构，因此没有可下发的值。发空帧或编造
+		// 字段都等于伪造，故仍如实回报未实现。
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdSysList:
@@ -1750,7 +1760,12 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 
 	case opCmdPortMapDump:
 		// 原版 dec case 0xb：遍历 [local_280+4] 的 0x20 字节会话表，对每项调
-		// FUN_01005300 取端口映射信息后用 FUN_0100d440(1, ...) 下发。
+		// FUN_01005300 取端口映射信息后用 FUN_0100d440(1, fmt, argv) 下发。
+		//
+		// 格式串已还原：0x109c10e `MOV RDI,[0x1e490a08]` + `ADD RDI,0x4a91`
+		// → pool+0x4a91 = "iss"（整数 + 两个字符串），调用点 0x109c134。
+		// 阻塞点同 connstat：0x20 字节会话表是原版的端口映射表，复刻端没有
+		// 对应的运行期结构。
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdSetSendDly:
@@ -1831,7 +1846,12 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 
 	case opCmdProxyList:
 		// 原版 dec case 0x14：遍历 [local_280+0x248] 链表，每条用
-		// FUN_0100d440(1, ...) 下发。
+		// FUN_0100d440(1, fmt, argv) 下发；链表节点类型由 [node+100]&3 在
+		// `c`/`u`/`pk`（pool+0x4a87/0x4a89/0x447c）三者间选择。
+		//
+		// 格式串已还原：0x109ae9b `MOV RDI,[0x1e490a08]` + `ADD RDI,0x4a8b`
+		// → pool+0x4a8b = "isisi"（整数/字符串交替五段），调用点 0x109aec1。
+		// 阻塞点同 connstat：该链表是原版的代理表，复刻端没有对应结构。
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdSysList2:
@@ -2023,9 +2043,21 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("sysinfo %d", agentSysInfoMode), ""
 
 	case opCmdSetDomain:
-		// 原版 dec case 0x27：无参数 → FUN_01094ba0 下发全局 DAT_1e490960；
+		// 原版 dec case 0x27：无参数 → FUN_01094ba0 下发全局 DAT_1e490960（域名/SNI）；
 		// 有参数 → 空串清空该全局，否则 FUN_00fbd960 解析后写入。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		//
+		// 全局的**内容**是运行期写入的（静态镜像为 0），但该分支的行为只依赖
+		// 「设置/清空/回读」本身，不依赖串的具体值，因此按原样实现：无参数回报
+		// 当前值，有参数则设置（空串清空）。
+		//
+		// ⚠ 偏差：原版下发的是 DAT_1e490960 指向的运行期串；复刻端用自有状态
+		// agentDomain 代替，语义等价、文本不保证与原文一致。
+		if hasArg {
+			// 该分支的参数是文本（域名/SNI），不是 4 字节整数块。
+			agentDomain = strings.TrimSpace(string(argv[1:]))
+		}
+		emitStringFrames(agentDomain)
+		return fmt.Sprintf("domain %q", agentDomain), ""
 
 	case opCmdKeepAlive:
 		// 原版 dec case 0x28：无参数 → 0xffffffff → FUN_01100940 读；有参数 →
