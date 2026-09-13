@@ -240,7 +240,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdScreenshot, opCmdConnStat, opCmdSysList, opCmdSetGateway,
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
-		opCmdNetRoute, opCmdSysTime, opCmdPing, opCmdHostScan, opCmdFileList,
+		opCmdNetRoute, opCmdPing, opCmdHostScan, opCmdFileList,
 		opCmdTunnelCount, opCmdProcList, opCmdSvcList, opCmdSetDomain,
 		opCmdFwdPort,
 	}
@@ -492,3 +492,18 @@ func TestExecuteCommandNativeAndRelayPaths(t *testing.T) {
 
 // opIntervalAlias 是 interval 操作码的测试别名，避免测试里出现裸字节。
 const opIntervalAlias = opCmdInterval
+
+// 0x1a (sysTime) moved from the unimplemented set to the implemented set: the
+// query side (no arg → report whether the system time has been set) and the set
+// side (arg → apply) are both backed by the decompiled branch behaviour, and the
+// only unrecovered part — the exact reply string the original sends — is
+// documented as a divergence rather than left as `not implemented`.
+func TestSysTimeIsImplemented(t *testing.T) {
+	out, err := dispatchNativeCommand(1, opCmdSysTime, nil, 5)
+	if err != "" {
+		t.Fatalf("sysTime query returned error %q, want a report", err)
+	}
+	if out == "" {
+		t.Fatal("sysTime query returned empty output")
+	}
+}

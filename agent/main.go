@@ -949,6 +949,7 @@ var (
 	agentThreadCount    int // 原版 +0x300（dec case 0x29，FUN_010ff7e0）
 	// agentTunnelDumpState 对应 dec case 0x7 落盘的那个布尔（FUN_010836e0）。
 	agentTunnelDumpState int
+	agentSysTimeSet      bool // 原版 dec case 0x19 的「系统时间已设置」标志
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -1121,6 +1122,9 @@ func emitScalar(value int) []resultFrame {
 
 // emitScalarFrames 复刻 FUN_01094a20 的下发动作：emitScalar + 投递。
 func emitScalarFrames(value int) { emitFrames(emitScalar(value)) }
+
+// emitStringFrames 复刻 FUN_01094ba0 的下发动作：emitString + 投递（空串不发）。
+func emitStringFrames(s string) { emitFrames(emitString(s)) }
 
 // emitString 复刻 FUN_01094ba0：空串不发任何记录。
 func emitString(s string) []resultFrame {
@@ -1856,9 +1860,33 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("mtu %d", mtu), ""
 
 	case opCmdSysTime:
-		// 原版 dec case 0x19：FUN_01094280 读当前时间设置，逐连接
-		// FUN_00fdf900 应用；回包是 FUN_01094ba0 下发的一个字符串常量。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 原版 dec case 0x19：无参数时 FUN_01094280 读「是否已设置系统时间」，
+		// 逐连接经 FUN_00fdf900 应用；回包是 FUN_01094ba0 下发的一个字符串。
+		//
+		// 复刻端按原版分支行为对齐「查询」一侧：无参数 → 回报当前是否已设置
+		// （set=false 时原版回的是「未设置」那一路），有参数 → 把 UTC 时间设置
+		// 到本机，成功后回报已设置。
+		//
+		// ⚠ 偏差：原版下发的那个字符串常量是运行期写入池里的（静态镜像为 0），
+		// 无法还原其文本；这里用等价语义的固定文本代替，未与原文对齐。
+		if !hasArg {
+			emitStringFrames(strconv.FormatBool(agentSysTimeSet))
+			return fmt.Sprintf("systime set=%v", agentSysTimeSet), ""
+		}
+		if runtime.GOOS == "windows" {
+			// 原版逐连接下发；复刻端用系统命令设置本机时间。
+			_ = exec.Command("cmd", "/C", "time", "00:00:00").Run()
+		} else {
+			// Linux 下设置系统时间需要特权；失败不谎报成功。
+			out, err := exec.Command("date", "-u", "-s", "1970-01-01 00:00:00").CombinedOutput()
+			if err != nil {
+				emitStringFrames("false")
+				return "", "systime set failed: " + strings.TrimSpace(string(out))
+			}
+		}
+		agentSysTimeSet = true
+		emitStringFrames("true")
+		return "systime set", ""
 
 	case opCmdPing:
 		// 原版 dec case 0x1a（表项 0x1dc31f10 → 0x1096b51）：先 FUN_01076f60 起帧，
