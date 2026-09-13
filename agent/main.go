@@ -629,9 +629,134 @@ const (
 	CmdCleanup    = "cleanup"
 	CmdProxy      = "proxy"
 	CmdProxyStop  = "proxystop"
-	CmdPlugin     = "plugin"
-	CmdWget       = "wget"
+	// CmdPlugin 对应原版的 runplugin 任务。面板控制器拼出的命令是
+	// `runplugin <hex> <procArg> <true|false>`（见下方「Plugin / runner」一节），
+	// 不是 JSON 的 "plugin" 信封；这里同时保留两者，JSON 形态只是复刻端既有的
+	// 命令词汇表条目。
+	CmdPlugin = "plugin"
+	CmdWget   = "wget"
 )
+
+// ============================================================================
+// Plugin / runner（原版 runplugin）—— 结构与内容来源
+//
+// 原版的任务执行入口是 FUN_01152dc0（与 FUN_01153100 / FUN_011541e0 同族的
+// 命令执行器，服务「连接记录 / 命令记录」对象），其首个分支按命令文本分派：
+//
+//	FUN_01153100  命令执行器：FUN_00ec0cc0 建 4 字节状态单元，
+//	              逐条与命令文本做 FUN_00fc02c0（大小写不敏感比较，查表
+//	              DAT_1e2f00a0）匹配；匹配失败则回退到接收缓冲上的通用解析。
+//	              runplugin 走的是最后这条回退路径，**不是**一张显式的
+//	              命令名常量表——因此静态侧看不到它的字面量。
+//	FUN_011541e0  包装：先 FUN_01152dc0 把命令写进接收缓冲，再
+//	              FUN_0101a9e0 / FUN_0101a760 取回缓冲首地址与长度交给调用者。
+//	FUN_0113e2c0  接收缓冲：按需分配（+0x80 / +0x78），返回缓冲对象。
+//
+// 命令内容 = 全量插件字节的**十六进制展开**（控制器侧 FUN_018fd220 用表
+// DAT_1bdc772 = "0123456789abcdef" 每字节展开成 2 字符，拼成
+// `runplugin <hex> <procArg> <true|false>`，.net 插件末位为 true）。
+// 命令文本本身不含扩展名——插件类型由服务器先选定（.dll/.net/.exe + 架构）。
+//
+// 未恢复、因此本实现只做「解析 + 拒绝」的部分：
+//
+//	1. 十六进制 → 字节的落盘方式（写哪个路径、是否先 chmod）无据可查。
+//	2. 执行方式按插件类型不同（.exe 起进程 / .dll 与 .net 需进程内装载），
+//	   而二进制链接的 LoadLibraryA/W/ExW（0x0202cca4 / 0x026b6918 / 0x026b6928 …）
+//	   没有任何一处能反查到 runplugin 这条路径；类型推断（命令里没有扩展名）
+//	   同样未恢复。
+//	3. FUN_01b960 / FUN_01b540 等只是通道侧的原语，不构成插件装载的证据。
+//
+// 因此 dispatchPluginCommand 校验命令形状后**明确拒绝**，既不执行，也不构造
+// 落盘/装载流程。端到端的插件执行目前被服务器侧的载荷缺口（控制器不 dispatch）
+// 与本节的装载缺口共同阻塞。
+// ============================================================================
+
+// pluginCommand 是原版 runplugin 命令解析出的形状。
+// pluginCommand is the parsed shape of the original's runplugin command.
+type pluginCommand struct {
+	// Hex 是插件字节的十六进制展开（原版 FUN_018fd220 以 "0123456789abcdef"
+	// 生成，故原版恒为小写；解析时两者都接受）。
+	Hex string
+	// ProcArg 是面板的 procArg 字段（原版直接原样拼进命令，可含空格）。
+	ProcArg string
+	// IsNet 是命令末位的布尔：原版 .net 插件为 true，其余为 false。
+	IsNet bool
+}
+
+// pluginCommandPrefix 是原版 runplugin 命令的命令字。
+// 说明：该字面量在静态镜像里读不到（见上方 FUN_01153100 的说明），这里用的是
+// 控制器侧 RunPlugin 注释中已记录的拼装结果；它同时也是服务器实际会发出的文本。
+const pluginCommandPrefix = "runplugin"
+
+// parsePluginCommand 解析 `runplugin <hex> <procArg> <true|false>`。
+//
+// 形状（而非内容）来自控制器侧的拼装：命令字 + 空格 + 十六进制 + 空格 +
+// procArg + 空格 + 布尔。procArg 原样拼接、不加引号，因此可能含空格——按
+// 「首个空格切出 hex、末个空格切出布尔、其余即 procArg」解析，procArg 为空时
+// 中间会留下连续空格，同样能解析。
+//
+// 返回 (cmd, "") 表示形状合法（内容仍不执行）；否则 (nil, 原因)。
+func parsePluginCommand(cmdStr string) (*pluginCommand, string) {
+	s := strings.TrimSpace(cmdStr)
+	if !strings.HasPrefix(s, pluginCommandPrefix) {
+		return nil, "not a " + pluginCommandPrefix + " command"
+	}
+	rest := strings.TrimPrefix(s, pluginCommandPrefix)
+	if rest == "" || rest[0] != ' ' {
+		// "runpluginx ..." 不是本命令
+		return nil, "not a " + pluginCommandPrefix + " command"
+	}
+	rest = rest[1:]
+
+	// 末个空格切出布尔位。
+	i := strings.LastIndexByte(rest, ' ')
+	if i < 0 {
+		return nil, "runplugin: missing <hex> <procArg> <true|false>"
+	}
+	flag := rest[i+1:]
+	head := rest[:i]
+	if flag != "true" && flag != "false" {
+		return nil, "runplugin: last field must be true or false"
+	}
+
+	// 首个空格切出十六进制载荷，其余为 procArg。
+	j := strings.IndexByte(head, ' ')
+	if j < 0 {
+		// 只有 hex + flag（procArg 为空且被折叠）——原版会留两个空格，这里
+		// 不接受这种缺失，避免把 hex 当成 procArg。
+		return nil, "runplugin: missing <procArg>"
+	}
+	hexStr := head[:j]
+	procArg := head[j+1:]
+	if hexStr == "" {
+		return nil, "runplugin: empty plugin payload"
+	}
+	if len(hexStr)%2 != 0 {
+		return nil, "runplugin: plugin payload is not an even-length hex string"
+	}
+	for k := 0; k < len(hexStr); k++ {
+		c := hexStr[k]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return nil, "runplugin: plugin payload is not a hex string"
+		}
+	}
+	return &pluginCommand{Hex: hexStr, ProcArg: procArg, IsNet: flag == "true"}, ""
+}
+
+// dispatchPluginCommand 校验 runplugin 命令并明确拒绝执行。
+//
+// 为什么不执行：插件字节的落盘方式与按类型的装载/启动方式都没有恢复（见上方
+// 「Plugin / runner」一节的第 1、2 点），任何实现都会是编造的。这里只把形状
+// 校验做到位——将来补上装载实现时，这个入口就是接线点。
+func dispatchPluginCommand(cmdStr string) (string, string) {
+	cmd, reason := parsePluginCommand(cmdStr)
+	if cmd == nil {
+		return "", reason
+	}
+	return "", fmt.Sprintf(
+		"runplugin: plugin execution not implemented (payload of %d bytes and procArg parsed, but the original's write/load/execute path is unrecovered; see agent/main.go plugin section)",
+		len(cmd.Hex)/2)
+}
 
 // ============================================================================
 // Native command opcodes — FUN_010952e0
@@ -1968,11 +2093,25 @@ func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 	var cmdType string
 	var payload map[string]interface{}
 
-	if err := json.Unmarshal([]byte(cmdStr), &payload); err == nil {
+	parsedJSON := json.Unmarshal([]byte(cmdStr), &payload) == nil
+	if parsedJSON {
 		if t, ok := payload["type"].(string); ok {
 			cmdType = t
 		}
-	} else {
+	}
+
+	// 明确的命令类型但 payload 不是 JSON 对象（例如裸 `runplugin <hex> …`）时，
+	// cmdType 会落在零值上；必须由文本前缀判定，不能让下面的 default 把它当成
+	// 自由文本交给 shell。
+	if !parsedJSON {
+		trimmed := strings.TrimSpace(cmdStr)
+		if trimmed == pluginCommandPrefix || strings.HasPrefix(trimmed, pluginCommandPrefix+" ") {
+			return dispatchPluginCommand(cmdStr)
+		}
+		if strings.HasPrefix(trimmed, pluginCommandPrefix) {
+			// runpluginXXX …：报错而不是落进 shell
+			return "", "unknown command " + strconv.Quote(firstWord(trimmed))
+		}
 		cmdType = CmdShell
 	}
 
@@ -1989,6 +2128,12 @@ func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 		}
 		if strings.HasPrefix(command, "screen_capture") {
 			return dispatchScreenCommand(taskID, command)
+		}
+		// runplugin 命令在原版里不是 shell 命令，绝不能交给 runCommand。
+		if c := strings.TrimSpace(command); c == pluginCommandPrefix ||
+			strings.HasPrefix(c, pluginCommandPrefix+" ") ||
+			strings.HasPrefix(c, pluginCommandPrefix) {
+			return dispatchPluginCommand(c)
 		}
 		return runCommand(command, timeout)
 
@@ -2111,8 +2256,24 @@ func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 		return "", ""
 
 	default:
-		return runCommand(cmdStr, timeout)
+		// 未知命令类型必须**明确失败**，不能交给 shell。
+		//
+		// 两点原因：(1) 原版对未知命令有自己的错误路径（FUN_01153100 匹配失败后
+		// 走接收缓冲上的解析），把原文当 shell 执行既非原版行为、也无处可证；
+		// (2) 面板/服务器侧若拼出一条我们尚未识别的命令，直接执行等于把「我没
+		// 实现」变成「我替你执行」，风险不可接受。
+		// 只有显式的 {"type":"shell"}（以及无类型的自由文本，见上方 cmdType
+		// 赋值路径）才会进入 runCommand。
+		return "", "unknown command type " + strconv.Quote(cmdType)
 	}
+}
+
+// firstWord 取字符串的首个空白分隔片段（用于错误信息，避免回显超长载荷）。
+func firstWord(s string) string {
+	if i := strings.IndexAny(s, " \t\r\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func runCommand(command string, timeout int) (string, string) {
