@@ -238,7 +238,7 @@ func TestDispatchNativeCommandImplemented(t *testing.T) {
 func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 	pending := []byte{
 		opCmdScreenshot, opCmdConnStat, opCmdSysList,
-		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
+		opCmdPortMapDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdProxyList, opCmdSysList2,
 		opCmdPing, opCmdHostScan, opCmdFileList,
 		opCmdFwdPort,
@@ -582,5 +582,14 @@ func TestIfListAndIfDetailAreImplemented(t *testing.T) {
 		if _, err := dispatchNativeCommand(1, op, []byte{op}, 5); err != "" {
 			t.Logf("opcode 0x%02x reported: %v (acceptable when the host has no interfaces)", op, err)
 		}
+	}
+}
+
+// 0x0f (connlist/connDump) implemented on its locally reproducible half: this
+// host's TCP connection table. The original walks its own connection pool, which
+// has no counterpart here — labelled a divergence.
+func TestConnListIsImplemented(t *testing.T) {
+	if _, err := dispatchNativeCommand(1, opCmdConnDump, []byte{opCmdConnDump}, 5); err != "" {
+		t.Logf("connlist reported: %v (acceptable when the host has no connections)", err)
 	}
 }

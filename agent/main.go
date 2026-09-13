@@ -1820,7 +1820,19 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 	case opCmdConnDump:
 		// 原版 dec case 0xe：按名字命中会话后 FUN_01076f60 起帧，再遍历会话的
 		// 连接链表（FUN_010662c0 过滤）逐条下发 8 字段记录。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		//
+		// 分级：会话的**连接链表**是原版的运行期结构，本机没有等价物——但
+		// 「本机有哪些 TCP 连接」是可复现的事实（netstat/ss）。因此枚举本机
+		// 连接并逐条下发；字段文本为复刻端固定值。
+		// ⚠ 偏差：原版下发其连接池视图，复刻端下发本机连接表。
+		conns := listConnections()
+		if len(conns) == 0 {
+			return "", "connlist: no connections available"
+		}
+		for _, c := range conns {
+			emitStringFrames(c)
+		}
+		return fmt.Sprintf("connlist %d", len(conns)), ""
 
 	case opCmdPipeDump:
 		// 原版 dec case 0xf：按名字命中会话后遍历 0x17 个桶的表 DAT_1e492b80
@@ -2844,6 +2856,30 @@ func listServices() []string {
 		cmd = "sc query type= service state= all"
 	} else {
 		cmd = "systemctl list-units --type=service --no-pager"
+	}
+	out, errMsg := runCommand(cmd, 10)
+	if errMsg != "" || out == "" {
+		return nil
+	}
+	var res []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			res = append(res, line)
+		}
+	}
+	return res
+}
+
+// listConnections 枚举本机 TCP 连接（dec case 0xe 的本地可复现部分）。
+// listConnections enumerates this host's TCP connections — the locally
+// reproducible half of dec case 0xe. The original walks its own connection pool;
+// what we can reproduce is "which connections exist on this host".
+func listConnections() []string {
+	var cmd string
+	if runtime.GOOS == "windows" {
+		cmd = "netstat -ano -p tcp"
+	} else {
+		cmd = "ss -tn 2>/dev/null || netstat -tn 2>/dev/null"
 	}
 	out, errMsg := runCommand(cmd, 10)
 	if errMsg != "" || out == "" {
