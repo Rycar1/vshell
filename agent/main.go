@@ -723,20 +723,30 @@ const (
 // section below (resultFrame / emitScalar / emitString / emitFormat).
 //
 // 注意/CAVEAT：下面每个操作码的助记名是依据分支行为给出的描述性标签，并非从
-// 二进制里还原出的字符串（原版的命令文字串在运行期由 init 代码写入
-// DAT_1e490a08+0x44xx 段后才被 DAT_1e302680 的 key 指针引用，静态数据段全为 0，
-// 见 FUN_010952e0 dec case 0x1f 与 FUN_01094d80）。操作码字节本身与分支行为是实锤。
+// 二进制里还原出的字符串。操作码字节本身与分支行为是实锤；名字不是。
+//
+// 关于 DAT_1e302680：**它不是命令名表**，读它的记录不有助于实现操作码。
+// 复核证据（2026-09）：
+//   1) 加载期整表被 0x117b989 起的代码重写（`MOV RAX,[0x1e490a08]; ADD
+//      RAX,imm32; MOV [0x1e302680+24k],RAX`），即每项首字段是指向运行期
+//      字符串池的指针，静态镜像里为 0；
+//   2) 那张池用「目标块 − 源块、逐字节 mod 256、长度 0x9aff」解出（0x116d020
+//      装载，0x116d0c2 解码），得到 SQLite 的 pragma 名表（pool+0x4540 =
+//      "auto_vacuum"），与 SQLite 的 sqlite3Pragma 数组逐项吻合——该表来自
+//      内嵌 SQLite（modernc.org/sqlite），与 VShell 命令无关；
+//   3) 表内 0 个重定位（67 项 ×24B 区间 [0x1e302680,0x1e302cc8) 里没有任何
+//      .reloc 条目），所以「3 字节字段是已重定位的实指针」不成立；
+//   4) 解码后的池里没有 ifconfig/whoami/screenshot/socks5 等 VShell 字串。
+// 结论：命令名串在**另一个未定位的池**里，装法未恢复。此前把该表当成「偏移
+// 指向混淆池、进而可解出每个操作码常量」的推断已作废，不要据此再试。
 // The mnemonics below are descriptive labels for the branch behaviour, not
-// recovered literals: the original command strings are materialised at runtime
-// (init writes DAT_1e490a08+0x44xx; the static image holds zeros), which is why
-// the DAT_1e302680 key pointers are null in the file image. The opcode bytes
-// and the branch behaviour are confirmed. The 3-byte word at record offset +9
-// (e.g. 0x000010, 0x013810, 0x061b10) is a live pointer to the command string,
-// NOT an offset into a decoder: those bytes fall inside the relocated .rdata
-// section, and at image base 0x140000000 they would resolve to
-// 0x140010010 / 0x140138110 / 0x14061b110 — exactly the addresses the runtime
-// string table lands on. No attempt is made here to read them from the file,
-// because the reloc base is not the static image base.
+// recovered literals. On DAT_1e302680: it is NOT a command-name table. It is
+// rewritten at load (0x117b989: pool-base + imm32 per record), its pool decodes
+// as SQLite's pragma-name array (plaintext = dst - src over 0x9aff bytes, see
+// c2engine/string_decrypt.go), it contains zero relocations, and the decoded pool
+// holds no VShell strings. The per-opcode constants live in a different,
+// not-yet-located pool. Do not retry the "3-byte offset into the obfuscated pool"
+// theory.
 // ============================================================================
 
 const (
@@ -1770,9 +1780,16 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("ping interval %d", agentPingInterval), ""
 
 	case opCmdFileList:
-		// 原版 dec case 0x1f：循环 0x43 项，把 DAT_1e302680 每项的 key 指针
-		// 经 FUN_0100d440(1, ...) 下发 —— 是「命令名表」而不是目录列表。
+		// 原版 dec case 0x1f：循环 0x43 项，每项经 FUN_0100d440(1, ...) 下发一个
+		// 字符串（FUN_01094d80 在该表上做二分查找）。
+		//
+		// 该表**不是** VShell 命令名表：加载期由 0x117b989 用「池基址 + imm32」
+		// 重写首字段，解码其池（目标块 − 源块，0x9aff 字节）得到的是 SQLite 的
+		// pragma 名表，且表内 0 个重定位、池里没有任何 VShell 字串（详见操作码
+		// 表上方的复核说明）。因此这里既不能照原样下发，也无从解出字符串。
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 注：原版该分支下发的是 pragma 名（内嵌 SQLite 的 sqlite3Pragma 数组），
+		// 与 VShell 语义无关；复刻端不需要它。
 
 	case opCmdClientLimit:
 		// 原版 dec case 0x20：无参数 → 0xffffffff；有参数 → FUN_00fc02c0 匹配

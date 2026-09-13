@@ -81,3 +81,30 @@ func TestPoFilenameTemplates(t *testing.T) {
 		t.Errorf("default arch suffix = %q", PoDefaultArchSuffix)
 	}
 }
+
+// 家族 B 的实际形态：整池相减叠加（加载器 FUN_0116d020，站点 0x116d0cf）。
+// 两份 48 字节阵列相减必须得到池头，运算方向由此唯一确定。
+func TestPoPoolSubtractVectors(t *testing.T) {
+	for _, v := range PoPoolVectors {
+		got := PoPoolSubtract(v.Dst, v.Src)
+		if string(got) != string(v.Want) {
+			t.Errorf("%s: PoPoolSubtract = %q, want %q", v.Name, got, v.Want)
+		}
+	}
+}
+
+// 池长度必须是加载器写入的 0x9aff（0x116d0e0 的 CMP RAX,0x9aff）。
+func TestPoPoolGeometry(t *testing.T) {
+	if PoPoolLen != 0x9aff {
+		t.Errorf("PoPoolLen = %#x, want 0x9aff", PoPoolLen)
+	}
+	if PoPoolBaseGlobal != 0x1e490a08 {
+		t.Errorf("PoPoolBaseGlobal = %#x", PoPoolBaseGlobal)
+	}
+	if PoPoolLoadFunc != 0x116d020 {
+		t.Errorf("PoPoolLoadFunc = %#x", PoPoolLoadFunc)
+	}
+	if PoPoolSubtractSite != 0x116d0c2 {
+		t.Errorf("PoPoolSubtractSite = %#x", PoPoolSubtractSite)
+	}
+}

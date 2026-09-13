@@ -37,7 +37,7 @@ package c2engine
 //   - 写字节语义 out_i = v_i - seed_i, seed_{i+1} = seed_i + v_i（逐指令核对）；
 //   - 家族 A 的置换链（见 po_decode.go，两条向量已逐字节还原）。
 //
-// 未解决（不猜测）：
+// 未解决（不猜测 / NOT recovered, deliberately not guessed）：
 //   家族 B 中"步号/步序/k"如何在无外层循环计数器的构造器里推进，
 //   以及 while+switch 状态机的步进调度（Ghidra 无法直接反编译该 switch），
 //   尚未完全确定；因此本文件不产出任何家族 B 的具体字符串，
@@ -47,6 +47,107 @@ package c2engine
 // (out_i = v_i - seed_i, seed advances by v_i); the step/key scheduling of the
 // constructor state machines is still unrecovered, so no family-B string is
 // synthesised here.
+//
+// ============================================================================
+// 家族 B 的实际变体（第二轮取证已确定）：整池相减叠加
+// The family-B variant actually used by the binary: whole-pool subtract overlay
+// ============================================================================
+//
+// 反编译证据（v_windows_amd64.exe）：
+//
+//	加载器 FUN_0116d020（0x116d020，RVA 0x116d020，与 Ghidra VA 相同）：
+//	    源阵列：MOV RSI,[0x1d3adcb] ; MOV ECX,0x135e ; REP MOVSQ   → 拷到 [RSP+0x9b28]
+//	    目标阵列：同法拷 [0x1d448ca] (0x135e*8 字节)            → 拷到 [RSP+0x29]
+//	    回写：MOV RAX,[0x1e431460] ; MOV [0x1e490a08],RAX      ; 池基址全局
+//	         MOV [0x1e490864],[RAX]      ; 池头第 1 个 dword
+//	         MOV [0x1e490867],[RAX+3]    ; 池头第 2 个 dword（错位 3 字节）
+//
+//	解码器 FUN_010952e0 @0x109b473（唯一在派发器内读池基址的指令）：
+//	    0x109b473  MOV RAX,[0x1e490a08]       ; 池基址
+//	    0x109b47a  ADD RAX,0x4aa1             ; 字符串偏移
+//	    0x109b480  CALL FUN_0040abc0          ; 转成 runtime 字符串头
+//
+//	消费闭包 FUN_0116d0c2（派发器内的逐字节还原）：
+//	    0x116d0c2  MOVZX EDX,[RSP+RAX+0x9b19] ; 载入的源阵列（种子 16 字节 + 0x1d3adcb）
+//	    0x116d0ca  MOVZX ESI,[RSP+RAX+0x1a]   ; 目标阵列（种子 16 字节 + 0x1d448ca）
+//	    0x116d0cf  SUB ESI,EDX                ; 逐字节相减
+//	    0x116d0d1  MOV [RSP+RAX+0x1a],SIL     ; 就地写回目标阵列
+//	    0x116d0e0  CMP RAX,0x9aff            ; 池长度 0x9aff = 39679
+//	    0x116d0f4  CALL FUN_0044ac40(0,&[RSP+0x1a],0x9aff)   ; 产出 39679 字节 Go 字符串
+//
+//	即：明文池 = 目标阵列 - 源阵列（逐字节 mod 256），两个阵列都由 16 字节
+//	立即数（内含被其覆盖的 8 字节）后接 .rdata 常数块拼成。
+//
+//	Geometry that follows from the loader (all measured, not assumed):
+//	  .rdata 阵列为 0x135e 个 qword（含 MOVSQ 的 rep 计数），池长 0x9aff；
+//	  **加载器那份**池（0x117b954 的 67 条 MOV RAX,[池]; ADD RAX,imm）中
+//	  偏移即串首：0x4531 处正是 "analysis_limit"，且与表记录 0 的
+//	  V=0x00453101（off<<8|opcode）完全吻合；
+//	  **派发器那份**池的偏移则落在串首前一个字节（0x49f3 是 NUL、0x49f4 起
+//	  "-%T"；0x4a4a 是 NUL、0x4a4b 起 "reset"）。两份池的索引对齐不同，
+//	  只有加载器那份被验证过，派发器那份未被解出（见下）。
+//
+// 已验证：用上述引擎对派发器池（站点 0x116d0c2）逐字节解出 0x9aff 字节，
+// 池头即 "3.41.2"，并命中 Go runtime / SQLite / regexp 等本仓库依赖确实
+// 链接进来的字符串 —— 相减方向、池头位置与池长三者唯一自洽。
+//
+// 未解出（不猜测）：0x1e302680 表记录引用的 per-opcode 串（V = off<<8|opcode）
+// 与派发器的 0x49f3/0x953/... 一类串都指向**另一份池**：它们的加载器不在文件
+// 里（那份池的载体由运行时栈镜像拼出，其寄存器/常数在派发器主体的寄存器
+// 数据流中，静态字节扫描无法重建）。本池中已确认**没有** VShell 自己的命令串
+// （无 "ifconfig"/"whoami"/"socks5"/"stageless"）。如实记录，不补值。
+//
+// The per-opcode strings are in a second pool whose loader is not present as a
+// byte sequence in the file image (its carrier is a runtime stack image inside
+// the dispatcher's own register flow). Not reconstructed, and no value is
+// fitted to look plausible.
+
+// PoPoolSrc48 / PoPoolDst48 是派发器池前 48 字节的两份输入阵列，
+// 直接取自 FUN_0116d020 载入的 .rdata 常数（含 16 字节立即数种子）。
+// PoPoolWant48 是其相减结果（池头），作为回归向量钉死运算方向。
+var (
+	// 源阵列 [RSP+0x9b19]：种子 16 字节 + .rdata 0x1d3adcb
+	PoPoolSrc48 = []byte{
+		0x45, 0x54, 0xa7, 0x62, 0xb8, 0xd9, 0xc5, 0x8c, 0xaa, 0xa4, 0x83, 0x8e, 0xcb, 0x70, 0x20, 0x42,
+		0x98, 0x84, 0x84, 0xa8, 0xac, 0xc0, 0xe6, 0x21, 0x40, 0x36, 0xb3, 0xea, 0xde, 0xf2, 0x42, 0x44,
+		0x16, 0x01, 0xb2, 0xe6, 0xcf, 0x20, 0x94, 0x30, 0xe7, 0x4a, 0x9b, 0xa6, 0x0e, 0x41, 0x11, 0xd0,
+	}
+	// 目标阵列 [RSP+0x1a]：种子 16 字节 + .rdata 0x1d448ca
+	PoPoolDst48 = []byte{
+		0x78, 0x82, 0xdb, 0x93, 0xe6, 0x0b, 0xc5, 0xcd, 0xfe, 0xf3, 0xd0, 0xd7, 0x0e, 0xcf, 0x69, 0xb4,
+		0x01, 0xf8, 0xe9, 0xa8, 0xee, 0x29, 0x5a, 0x6f, 0xaf, 0xaa, 0xb3, 0x39, 0x4e, 0x57, 0xb0, 0x88,
+		0x8b, 0x71, 0xb2, 0x35, 0x3f, 0x85, 0x02, 0x71, 0x5c, 0xbe, 0x0a, 0x0f, 0x7c, 0xa5, 0x76, 0x48,
+	}
+	// 池头明文（0x116d0cf 的 SUB ESI,EDX 结果，48 字节全量核对）
+	PoPoolWant48 = []byte("3.41.2\x00ATOMIC_Irite\x00BitNot\x00OpenDup\x00OpenAutoindex")
+)
+
+// PoPoolSubtract 是 0x116d0cf 的逐字节还原：out_i = dst_i - src_i（mod 256）。
+//
+// PoPoolSubtract is the byte-wise recovery at 0x116d0cf: out_i = dst_i - src_i.
+func PoPoolSubtract(dst, src []byte) []byte {
+	n := len(dst)
+	if len(src) < n {
+		n = len(src)
+	}
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		out[i] = dst[i] - src[i]
+	}
+	return out
+}
+
+// PoPoolLen 是加载器写入的池长度（0x116d0e0 的 CMP RAX,0x9aff）。
+const PoPoolLen = 0x9aff
+
+// PoPoolBaseGlobal 是保存池基址的全局（0x1178c51 写入，0x109b473 读出）。
+const PoPoolBaseGlobal = 0x1e490a08
+
+// PoPoolLoadFunc 是加载器函数的入口（拷贝两份阵列并写池基址全局）。
+const PoPoolLoadFunc = 0x116d020
+
+// PoPoolSubtractSite 是派发器内做逐字节相减的站点（SUB ESI,EDX）。
+const PoPoolSubtractSite = 0x116d0c2
 
 // PoEmit 按家族 B 的写字节语义把常数块 vals 展开为闭包输出：
 // out_i = v_i - seed_i，seed_{i+1} = seed_i + v_i。
@@ -88,5 +189,22 @@ var PoEmitVectors = []PoEmitVector{
 		Vals: []byte{0x20, 0x05, 0xff},
 		// 0x20-0x10=0x10；seed=0x30 → 0x05-0x30=0xd5；seed=0x35 → 0xff-0x35=0xca
 		Want: []byte{0x10, 0xd5, 0xca},
+	},
+}
+
+// PoPoolVectors 是整池相减解码的回归向量：两份前 48 字节阵列必须解出池头
+// （Go buildinfo 魔数前缀 "3.41.2" 之后的 NUL 分隔串）。
+//
+// PoPoolVectors pins the whole-pool subtract decode against the loader's arrays.
+var PoPoolVectors = []struct {
+	Name     string
+	Dst, Src []byte
+	Want     []byte
+}{
+	{
+		Name: "dispatcher pool head",
+		Dst:  PoPoolDst48,
+		Src:  PoPoolSrc48,
+		Want: []byte("3.41.2\x00ATOMIC_Irite\x00BitNot\x00OpenDup\x00OpenAutoindex"),
 	},
 }
