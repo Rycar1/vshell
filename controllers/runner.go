@@ -14,7 +14,11 @@
 package controllers
 
 import (
+	"errors"
+	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -52,13 +56,16 @@ func (c *RunnerController) RunPlugin() {
 
 // Upload 上传插件（POST /runner/upload）。参数：file。
 func (c *RunnerController) Upload() {
-	file, _, err := c.GetFile("file")
+	file, header, err := c.GetFile("file")
 	if err != nil {
 		c.JsonErr("upload failed: " + err.Error())
 		return
 	}
 	defer file.Close()
-	engineSavePlugin(file)
+	if err := engineSavePlugin(header.Filename, file); err != nil {
+		c.JsonErr("save plugin failed: " + err.Error())
+		return
+	}
 	c.JsonOkMessage("ok")
 }
 
@@ -66,7 +73,7 @@ func (c *RunnerController) Upload() {
 
 func engineListPlugins() []map[string]interface{} {
 	// 反编译：FUN_005e8cc0("./plugins") 读目录，逐项 {id: 下标, name: 名称}
-	entries, err := os.ReadDir("./plugins")
+	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -80,6 +87,29 @@ func engineListPlugins() []map[string]interface{} {
 	return list
 }
 
-func engineSavePlugin(f interface{ Close() error }) {
-	// TODO(engine): 对齐插件保存（RunnerController.Upload 反编译）
+// pluginsDir 是插件目录（原版 "./plugins"，反编译字符串已解）。
+const pluginsDir = "./plugins"
+
+// engineSavePlugin 把上传的插件写入插件目录（原版 RunnerController.Upload
+// 保存到 ./plugins 后由 engineListPlugins 列出）。
+//
+// 文件名来自 HTTP 头，必须剥离路径：否则 "../../x" 之类的名字会写到目录之外。
+func engineSavePlugin(name string, src io.Reader) error {
+	base := filepath.Base(filepath.FromSlash(name))
+	if base == "." || base == ".." || base == string(filepath.Separator) || base == "" {
+		return errors.New("invalid plugin name")
+	}
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		return err
+	}
+	dst, err := os.OpenFile(filepath.Join(pluginsDir, base), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	log.Printf("[runner] saved plugin %s", base)
+	return nil
 }
