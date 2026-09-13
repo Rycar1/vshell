@@ -61,7 +61,7 @@ func initTestEngine(t *testing.T) {
 func TestTerminalWSUpgradesAndStartsAgentShell(t *testing.T) {
 	initTestEngine(t)
 	client, err := c2engine.GetEngine().NewClient("term-vkey", "http", "127.0.0.1:1",
-		"127.0.0.1", "u", "h", "linux", "agent")
+		"127.0.0.1", "u", "h", "linux", "agent", "amd64")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -106,7 +106,7 @@ func waitForViewer(t *testing.T, kind string, clientID int64) {
 func TestTerminalWSDeliversAgentOutput(t *testing.T) {
 	initTestEngine(t)
 	client, err := c2engine.GetEngine().NewClient("term-vkey-2", "http", "127.0.0.1:1",
-		"127.0.0.1", "u", "h", "linux", "agent")
+		"127.0.0.1", "u", "h", "linux", "agent", "amd64")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestTerminalWSDeliversAgentOutput(t *testing.T) {
 func TestScreenWSDeliversCompressedFrames(t *testing.T) {
 	initTestEngine(t)
 	client, err := c2engine.GetEngine().NewClient("screen-vkey", "http", "127.0.0.1:1",
-		"127.0.0.1", "u", "h", "windows", "agent")
+		"127.0.0.1", "u", "h", "windows", "agent", "amd64")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}

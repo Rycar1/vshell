@@ -30,7 +30,7 @@ func TestScreenshotGetReturnsRawBase64(t *testing.T) {
 	initEngineStorage(t)
 
 	client, err := c2engine.GetEngine().NewClient("shot-vkey", "http", "127.0.0.1:1",
-		"127.0.0.1", "u", "h", "windows", "agent")
+		"127.0.0.1", "u", "h", "windows", "agent", "amd64")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
