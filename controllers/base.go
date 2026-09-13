@@ -50,6 +50,17 @@ type ApiBaseController struct {
 //  3. 两者皆空 → 输出 HTTP 401（Output status 0x191）后返回；
 //  4. 会话校验失败 → JsonTimeout（{"code":-1,"result":null}）；
 //  5. 会话无效 → 401。
+//
+// 拒绝分支直接写响应头，而不用 StopRun：beego 的 StopRun 是 panic(ErrAbort)，
+// 而默认 recover（defaultRecoverPanic）对 ErrAbort 直接 return、不落状态码，
+// 于是未授权请求会以 200 返回。写头会把 beego 的 Response.Started 置真，
+// beego 随即跳过控制器方法体与 AutoRender——这正是拒绝所需的语义。
+//
+// Rejections write the header directly rather than calling StopRun: beego
+// implements StopRun as panic(ErrAbort), and its default recover returns for
+// ErrAbort without emitting the status code, so an unauthenticated request
+// would come back 200. Writing the header sets beego's Response.Started, which
+// makes beego skip both the action method and AutoRender.
 func (c *ApiBaseController) Prepare() {
 	path := c.Ctx.Input.URL()
 	if path == "/api/login" || path == "/api/logout" {
@@ -60,19 +71,25 @@ func (c *ApiBaseController) Prepare() {
 		token = c.GetString("token")
 	}
 	if token == "" {
-		c.Ctx.Output.SetStatus(401)
+		c.denyUnauthorized()
 		return
 	}
 	if !CheckToken(token) {
 		c.JsonTimeout()
-		c.StopRun()
 		return
 	}
 	// 会话校验（原版 FUN_01737500 / FUN_00c8dc20 会话存储检查）
 	if !engineCheckSession(token) {
-		c.Ctx.Output.SetStatus(401)
+		c.denyUnauthorized()
 		return
 	}
+}
+
+// denyUnauthorized 落 401 并终止本次请求的处理。
+// denyUnauthorized emits 401 and stops this request from reaching an action.
+func (c *ApiBaseController) denyUnauthorized() {
+	c.Ctx.Output.SetStatus(401)
+	c.Ctx.ResponseWriter.WriteHeader(401)
 }
 
 // JsonGet 读取任意参数值（GET 查询串 / 表单 / JSON 请求体，与 beego 输入解析一致）。
@@ -217,12 +234,16 @@ func (c *ApiBaseController) JsonErr(msg string) {
 
 // JsonTimeout 超时/未授权响应：{"code":-1,"result":null}
 // 反编译（0x18d9000）键集合：code / result。
+// 显式写出 401：原版通过 Output status 触发该状态码，而复刻端若只依赖 beego
+// 的 AutoRender 分支，响应会落在 200 上——401 必须自己落到响应里。
 func (c *ApiBaseController) JsonTimeout() {
+	c.Ctx.Output.SetStatus(401)
 	c.Data["json"] = map[string]interface{}{
 		"code":   -1,
 		"result": nil,
 	}
 	c.ServeJSON()
+	c.Ctx.ResponseWriter.WriteHeader(401)
 }
 
 // GetIntNoErr 读取 int 参数（忽略错误，0x18d9200）。

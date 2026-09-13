@@ -100,9 +100,21 @@ func registerAPIRoutes() {
 		beego.Router("/api/setting/get", &controllers.SettingController{}, "get:Get")
 
 		// 终端 / 屏幕（WebSocket）
-		beego.Router("/api/terminal/ws", &controllers.TerminalController{}, "get:Ws")
+		//
+		// 这两条路由不走 beego：SPA 的 WebSocket 端点由控制器直接 Hijack 连接
+		// （upgrade + 双向转发），而 beego 在控制器方法返回后会继续渲染视图——
+		// 内嵌的 SPA 是前端资源而非模板，于是必然抛 "Unknown view path:views"
+		// 并接管（已被劫持的）响应。注册为 net/http 处理器后，升级由
+		// registerStreamWSRoutes 直接完成，控制器方法只负责会话逻辑。
+		//
+		// Terminal / screen WebSocket endpoints are registered as net/http
+		// handlers rather than beego routes: the handler hijacks the connection,
+		// and beego would afterwards try to render a view for the (already
+		// hijacked) response and fail with "Unknown view path:views".
+		//
+		// 终端（单发命令，POST）—— /api/terminal/ws 与 /api/screen/ws 见下方
+		// registerStreamWSRoutes。
 		beego.Router("/api/terminal/shell", &controllers.TerminalController{}, "post:Shell")
-		beego.Router("/api/screen/ws", &controllers.ScreenController{}, "get:Ws")
 
 		// 截图
 		beego.Router("/api/screenshot/get", &controllers.ScreenshotController{}, "get:Get")
@@ -149,6 +161,10 @@ func InitRouter() http.Handler {
 	// beego API 控制器（真实路由）
 	mux.Handle("/api/", beego.BeeApp.Handlers)
 
+	// 面板查看者 WebSocket（终端 / 屏幕）：beego 无法承载 Hijack，见
+	// registerAPIRoutes 的说明。
+	registerStreamWSRoutes(mux)
+
 	// C2 Agent 协议端点
 	registerC2AgentRoutes(mux)
 
@@ -179,6 +195,39 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
+// registerStreamWSRoutes 注册面板查看者 WebSocket 端点。
+// registerStreamWSRoutes registers the panel's viewer WebSocket endpoints.
+//
+// 认证复用 ApiBaseController.Prepare 的同一套 token 校验（Token 头 / token
+// 查询串，见 controllers.CheckToken 与用户信息接口），校验失败返回 401 且
+// 不升级连接；通过后由控制器完成升级与会话建立。
+func registerStreamWSRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/api/terminal/ws", func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewerToken(w, r) {
+			return
+		}
+		controllers.ServeTerminalViewer(w, r)
+	})
+	mux.HandleFunc("/api/screen/ws", func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewerToken(w, r) {
+			return
+		}
+		controllers.ServeScreenViewer(w, r)
+	})
+}
+
+// requireViewerToken 校验查看者 token；失败时写 401 并返回 false。
+// requireViewerToken enforces the panel token on a viewer WebSocket request.
+func requireViewerToken(w http.ResponseWriter, r *http.Request) bool {
+	token := extractToken(r)
+	if token == "" || !controllers.CheckToken(token) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// registerC2AgentRoutes 注册 C2 Agent 协议端点。
 func registerC2AgentRoutes(mux *http.ServeMux) {
 	// 黑盒验证（session 82）：/c2/l/* 全部 404——原版无 HTTP C2 端点。
 	// 真实 agent 协议 = KCP/WS/DNS 传输 + checkin 文本命令

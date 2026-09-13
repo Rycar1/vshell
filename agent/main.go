@@ -826,6 +826,10 @@ type agentScreenCapture struct {
 	index  int64
 	active bool
 	fps    int
+	// quality is the viewer-selected clarity (the panel's 清晰度 radio, sent as
+	// quality=N). It is emitted in the frame payload so the server can pick a
+	// matching compression level for the viewer.
+	quality int
 }
 
 var screenCap agentScreenCapture
@@ -842,6 +846,7 @@ func startScreenCapture(quality, fps int, taskID int64) (string, string) {
 	screenCap.index = 0
 	screenCap.active = true
 	screenCap.fps = fps
+	screenCap.quality = quality
 	if screenCap.fps <= 0 {
 		screenCap.fps = 1
 	}
@@ -877,8 +882,10 @@ func startScreenCapture(quality, fps int, taskID int64) (string, string) {
 				screenCap.mu.Lock()
 				screenCap.index++
 				idx := screenCap.index
+				q := screenCap.quality
 				screenCap.mu.Unlock()
-				payload := "screen_frame:png:" + strconv.FormatInt(idx, 10) + ":" + enc
+				payload := "screen_frame:png:" + strconv.FormatInt(idx, 10) +
+					":" + strconv.Itoa(q) + ":" + enc
 				if transport != nil {
 					if err := transport.SendResult(taskID, payload, "completed"); err != nil {
 						log.Printf("Screen frame send failed: %v", err)
@@ -912,7 +919,9 @@ func setScreenCaptureParam(kind string, value int) (string, string) {
 	case "fps":
 		screenCap.fps = value
 	case "quality":
-		// quality is a hint for compression; the capture tools ignore it
+		// The capture tools always produce the same image; quality rides along
+		// on each frame so the server can tune the viewer's compression.
+		screenCap.quality = value
 	}
 	return "ok", ""
 }

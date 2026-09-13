@@ -35,6 +35,10 @@ func forwardStreamingResult(clientID int64, result string) bool {
 	if resultForwardHook != nil {
 		resultForwardHook(clientID, result)
 	}
+	// Fan the payload out to this client's live WebSocket viewers (terminal /
+	// screen). The hook above is for controller-side consumers; HandleStreamingResult
+	// is the engine-side relay and runs regardless of whether a hook is registered.
+	HandleStreamingResult(clientID, result)
 	return true
 }
 

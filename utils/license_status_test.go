@@ -7,13 +7,20 @@ import (
 )
 
 // TestLicenseStatusMatchesOriginalBehavior verifies the observed original
-// binary license behavior: with the shipped license key present, the status
-// reports the values the original logs (public / 20991201 / 99 / vip).
+// binary license behavior: with a license key present, the status reports the
+// values the original logs (public / 20991201 / 99 / vip).
+//
+// The test writes the license into a temporary config rather than reading
+// conf/setting.conf: conf/ is gitignored (it holds the operator's real
+// credentials), so a checkout has no such file and the test would fail for
+// every fresh clone. Only the license key is under test here.
 func TestLicenseStatusMatchesOriginalBehavior(t *testing.T) {
-	// Load config with the shipped license from the repo conf dir
-	wd, _ := os.Getwd()
-	t.Logf("cwd=%s", wd)
-	cfg, err := LoadConfig(filepath.Join(wd, "..", "conf", "setting.conf"))
+	confPath := filepath.Join(t.TempDir(), "setting.conf")
+	conf := "license=public\nmaster_type=web\nweb_port=8082\n"
+	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
+		t.Fatalf("write temp conf: %v", err)
+	}
+	cfg, err := LoadConfig(confPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
