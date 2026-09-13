@@ -237,7 +237,7 @@ func TestDispatchNativeCommandImplemented(t *testing.T) {
 // 而不是伪造成功（项目规则：不能臆造实现）。
 func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 	pending := []byte{
-		opCmdScreenshot, opCmdConnStat, opCmdSysList, opCmdSetGateway,
+		opCmdScreenshot, opCmdConnStat, opCmdSysList,
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
 		opCmdNetRoute, opCmdPing, opCmdHostScan, opCmdFileList,
@@ -531,5 +531,19 @@ func TestSetDomainIsImplemented(t *testing.T) {
 	}
 	if _, err := dispatchNativeCommand(1, opCmdSetDomain, []byte{opCmdSetDomain}, 5); err != "" {
 		t.Fatalf("setDomain(query) returned error %q", err)
+	}
+}
+
+// 0x0b (setGateway) implemented. Same shape as 0x28: the branch's behaviour is
+// set/clear/read-back of a global, so it is implementable even though the
+// original's global holds a runtime-written string. The global itself
+// (DAT_1e490968) is a real .data object, not a missing equivalent.
+func TestSetGatewayIsImplemented(t *testing.T) {
+	in := append([]byte{opCmdSetGateway}, []byte("10.0.0.1:443")...)
+	if _, err := dispatchNativeCommand(1, opCmdSetGateway, in, 5); err != "" {
+		t.Fatalf("setGateway(set) returned error %q", err)
+	}
+	if _, err := dispatchNativeCommand(1, opCmdSetGateway, []byte{opCmdSetGateway}, 5); err != "" {
+		t.Fatalf("setGateway(query) returned error %q", err)
 	}
 }

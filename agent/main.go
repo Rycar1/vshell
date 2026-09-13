@@ -954,6 +954,8 @@ var (
 	agentTunnelCount int
 	// agentDomain 对应 dec case 0x27 的全局 DAT_1e490960（域名/SNI）。
 	agentDomain string
+	// agentGateway 对应 dec case 0xa 的全局 DAT_1e490968（前置/网关地址）。
+	agentGateway string
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -1753,10 +1755,21 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdSetGateway:
-		// 原版 dec case 0xa：无参数 → FUN_01094ba0 下发 DAT_1e490968；
-		// 有参数 → FUN_00fb6840 连接测试后 FUN_00fbd960 解析并写入该全局。
-		// 复刻端的连接由 engine 管理，没有等价的「前置地址」全局。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 原版 dec case 0xa：无参数 → FUN_01094ba0 下发全局 DAT_1e490968（前置/网关
+		// 地址）；有参数 → 空串清空该全局，否则 FUN_00fbd960 解析后写入。
+		//
+		// DAT_1e490968 是**真实存在的 .data 全局**（VA 0x1e490968 → RVA 0x1e090968，
+		// 落在 .data RVA 0x1dedd000–0x1e0ca160 内），此前把它当成「复刻端没有的
+		// 等价物」而搁置，是因为把 Ghidra VA 当 RVA 比对——那是我的地址换算错误。
+		//
+		// 与 setDomain（dec 0x27）同形：全局的**内容**运行期写入，但分支行为只
+		// 依赖设置/清空/回读，故按行为对齐；参数是文本而非 4 字节整数块。
+		// ⚠ 偏差：原版下发的是其运行期串，复刻端用自有状态 agentGateway 代替。
+		if hasArg {
+			agentGateway = strings.TrimSpace(string(argv[1:]))
+		}
+		emitStringFrames(agentGateway)
+		return fmt.Sprintf("gateway %q", agentGateway), ""
 
 	case opCmdPortMapDump:
 		// 原版 dec case 0xb：遍历 [local_280+4] 的 0x20 字节会话表，对每项调
