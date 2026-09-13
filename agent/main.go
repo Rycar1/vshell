@@ -737,16 +737,17 @@ const (
 //   3) 表内 0 个重定位（67 项 ×24B 区间 [0x1e302680,0x1e302cc8) 里没有任何
 //      .reloc 条目），所以「3 字节字段是已重定位的实指针」不成立；
 //   4) 解码后的池里没有 ifconfig/whoami/screenshot/socks5 等 VShell 字串。
-// 结论：命令名串在**另一个未定位的池**里，装法未恢复。此前把该表当成「偏移
-// 指向混淆池、进而可解出每个操作码常量」的推断已作废，不要据此再试。
+// 结论：命令名字串**不在这张表里**，其所在表尚未定位（见「操作码表」上方复核
+// 说明与 c2engine/string_decrypt.go 的排除清单）。此前把该表当成「偏移指向混淆
+// 池、进而可解出每个操作码常量」的推断已作废，不要据此再试。
 // The mnemonics below are descriptive labels for the branch behaviour, not
 // recovered literals. On DAT_1e302680: it is NOT a command-name table. It is
 // rewritten at load (0x117b989: pool-base + imm32 per record), its pool decodes
 // as SQLite's pragma-name array (plaintext = dst - src over 0x9aff bytes, see
 // c2engine/string_decrypt.go), it contains zero relocations, and the decoded pool
 // holds no VShell strings. The per-opcode constants live in a different,
-// not-yet-located pool. Do not retry the "3-byte offset into the obfuscated pool"
-// theory.
+// table stays unresolved. Do not retry the "3-byte offset into the obfuscated
+// pool" theory.
 // ============================================================================
 
 const (

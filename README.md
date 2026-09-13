@@ -152,8 +152,8 @@ Listeners are created dynamically through the web panel API (`c2engine.NewListen
   is NOT a command-name table and its 3-byte field is NOT an offset into a
   decoder — it is SQLite's `sqlite3Pragma` list (from the embedded
   modernc.org/sqlite), rewritten at load by `0x117b989`, containing zero
-  relocations. The per-opcode constants live in a different, not-yet-located
-  pool.
+  relocations. Where the per-opcode name table lives remains unresolved; the
+  pools that decode cleanly contain no VShell strings.
 - **Obfuscated string chain** (`po`/`decFunc`): a permutation chain whose per-step
   operation is class-dependent; recovered byte-exactly
   (`"stageless/ebpf_%s_%s"`, `"windows_amd64.exe"`).
@@ -173,7 +173,7 @@ Listeners are created dynamically through the web panel API (`c2engine.NewListen
 | Item | Status |
 |---|---|
 | Most of the 41 `FUN_010952e0` opcodes | Report `not implemented` — their client-state fields and result-frame encodings have no counterpart yet. Frame emitters: `FUN_0100d160`/`FUN_0100d440`/`FUN_0100d5e0` |
-| Per-opcode string constants | Not in the table previously believed to hold them (that one is SQLite pragma names). They live in a second, not-yet-located garble pool whose loader is absent; the decoder geometry for the located pools is recovered (`c2engine/string_decrypt.go`) |
+| Per-opcode string constants | Not in the table previously believed to hold them (that one is SQLite pragma names, and the dispatcher record comes from its binary search). The table that holds them is unlocated; ruled out so far: that table, any file-image table with relocations, and all 881 cleanly-decodable pools (`c2engine/string_decrypt.go`) |
 | `FUN_0194d140` background services | Constant-based branches unaligned; `AppBackground` covers the license/`licTime` path only |
 | Download payload bytes | Labeled a **known deviation**: templates are fetched through the listener at request time, config values are per-listener, and the argv key is unrecovered. Two placeholders are documented in-source (`PoArgvSeed`, argv entry key) |
 | Embedded agent binaries | Not statically extractable — Go fills the per-file `{ptr, len}` records from `init` via `loaduintptr` |

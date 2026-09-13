@@ -68,58 +68,66 @@ package c2engine
 //	    0x109b480  CALL FUN_0040abc0          ; 转成 runtime 字符串头
 //
 //	消费闭包 FUN_0116d0c2（派发器内的逐字节还原）：
-//	    0x116d0c2  MOVZX EDX,[RSP+RAX+0x9b19] ; 载入的源阵列（种子 16 字节 + 0x1d3adcb）
-//	    0x116d0ca  MOVZX ESI,[RSP+RAX+0x1a]   ; 目标阵列（种子 16 字节 + 0x1d448ca）
+//	    0x116d0c2  MOVZX EDX,[RSP+RAX+0x9b19] ; 源阵列（15 字节前缀 + 0x1d3adcb）
+//	    0x116d0ca  MOVZX ESI,[RSP+RAX+0x1a]   ; 目标阵列（15 字节前缀 + 0x1d448ca）
 //	    0x116d0cf  SUB ESI,EDX                ; 逐字节相减
 //	    0x116d0d1  MOV [RSP+RAX+0x1a],SIL     ; 就地写回目标阵列
 //	    0x116d0e0  CMP RAX,0x9aff            ; 池长度 0x9aff = 39679
 //	    0x116d0f4  CALL FUN_0044ac40(0,&[RSP+0x1a],0x9aff)   ; 产出 39679 字节 Go 字符串
 //
-//	即：明文池 = 目标阵列 - 源阵列（逐字节 mod 256），两个阵列都由 16 字节
-//	立即数（内含被其覆盖的 8 字节）后接 .rdata 常数块拼成。
+//	即：明文池 = 目标阵列 - 源阵列（逐字节 mod 256），两个阵列的前缀由两个
+//	imm64 组成，**第二个 imm64 写在第一个的第 8 字节上**（0x9b19+8 与 0x9b21-1
+//	重合），因此有效前缀是 15 字节而不是 16 —— 这一点由 67 个加载器偏移同时
+//	判定：15 字节前缀让 66/67 个偏移都落在串首（16 字节前缀一个都不落）。
 //
 //	Geometry that follows from the loader (all measured, not assumed):
 //	  .rdata 阵列为 0x135e 个 qword（含 MOVSQ 的 rep 计数），池长 0x9aff；
-//	  **加载器那份**池（0x117b954 的 67 条 MOV RAX,[池]; ADD RAX,imm）中
-//	  偏移即串首：0x4531 处正是 "analysis_limit"，且与表记录 0 的
-//	  V=0x00453101（off<<8|opcode）完全吻合；
-//	  **派发器那份**池的偏移则落在串首前一个字节（0x49f3 是 NUL、0x49f4 起
-//	  "-%T"；0x4a4a 是 NUL、0x4a4b 起 "reset"）。两份池的索引对齐不同，
-//	  只有加载器那份被验证过，派发器那份未被解出（见下）。
+//	  两份前缀均为 15 字节（第二 imm64 覆盖第一 imm64 的末字节）；
+//	  加载器 0x117b954 的 67 条 MOV RAX,[池]; ADD RAX,imm 中偏移即串首：
+//	  0x4531 处正是 "analysis_limit"，且与表记录 0 的 V=0x00453101 吻合；
+//	  派发器的 0x49f3 处是 "-%T"、0x49f7 处是 "fast"、0x4a4a 处是 "reset" ——
+//	  都是**串首**（不是被 NUL 前导的串），也就是说派发器读的就是这份池。
 //
-// 已验证：用上述引擎对派发器池（站点 0x116d0c2）逐字节解出 0x9aff 字节，
-// 池头即 "3.41.2"，并命中 Go runtime / SQLite / regexp 等本仓库依赖确实
-// 链接进来的字符串 —— 相减方向、池头位置与池长三者唯一自洽。
+// 已验证：用上述引擎逐字节解出派发器池 0x9aff 字节，池头即 "3.41.2"，并命中
+// Go runtime / SQLite / regexp 等本仓库依赖确实链接进来的字符串；相减方向、
+// 前缀长度、池头位置与池长四者同时自洽。
 //
-// 未解出（不猜测）：0x1e302680 表记录引用的 per-opcode 串（V = off<<8|opcode）
-// 与派发器的 0x49f3/0x953/... 一类串都指向**另一份池**：它们的加载器不在文件
-// 里（那份池的载体由运行时栈镜像拼出，其寄存器/常数在派发器主体的寄存器
-// 数据流中，静态字节扫描无法重建）。本池中已确认**没有** VShell 自己的命令串
-// （无 "ifconfig"/"whoami"/"socks5"/"stageless"）。如实记录，不补值。
+// 未解出（不猜测，NOT recovered）：0x1e302680 表**不是** per-opcode 命令表。
+//	它是 SQLite 的 sqlite3Pragma 列表（67 条），由 FUN_01094d80（二分查找）
+//	与 0x1094e60 使用；记录 0 的目标 0x1e494578 由 0x117b961 写入
+//	[0x1e490a08]+0x451e。所以它的字符串当然全在 SQLite 池里。
+//	派发器 0x109578e 的 24 字节记录指针来自 FUN_01094d80 的返回值 ——
+//	**不是** 0x1e302680 那个表。per-opcode 名称真正所在的表尚未定位：
+//	已排除 (a) 0x1e302680（SQLite）、(b) 文件镜像中任何带重定位的表
+//	（[0x1e302680,0x1e302cc8) 零重定位）、(c) 我解码的全部 881 个可解池
+//	（其中无 ifconfig/whoami/screenshot/socks5/tasklist/netstat）。
 //
-// The per-opcode strings are in a second pool whose loader is not present as a
-// byte sequence in the file image (its carrier is a runtime stack image inside
-// the dispatcher's own register flow). Not reconstructed, and no value is
-// fitted to look plausible.
+// The 0x1e302680 table is SQLite's sqlite3Pragma list, not a VShell opcode
+// table; the dispatcher's 24-byte record comes from FUN_01094d80, not from it.
+// Where the per-opcode name table lives remains unresolved and is recorded as
+// such — no structural inference is presented as a finding.
 
-// PoPoolSrc48 / PoPoolDst48 是派发器池前 48 字节的两份输入阵列，
-// 直接取自 FUN_0116d020 载入的 .rdata 常数（含 16 字节立即数种子）。
-// PoPoolWant48 是其相减结果（池头），作为回归向量钉死运算方向。
+// PoPoolSrc48 / PoPoolDst48 是派发器池前 48 字节的两份输入阵列，直接取自
+// FUN_0116d020 载入的 .rdata 常数：每个阵列的有效前缀是 15 字节（两个 imm64
+// 在 +8 处重叠，第二个覆盖第一个的末字节），之后接 .rdata 常数块。
+// PoPoolWant48 是相减结果（池头），作为回归向量钉死运算方向与前缀长度。
 var (
-	// 源阵列 [RSP+0x9b19]：种子 16 字节 + .rdata 0x1d3adcb
+	// 源阵列 [RSP+0x9b19]：15 字节前缀 + .rdata 0x1d3adcb
 	PoPoolSrc48 = []byte{
-		0x45, 0x54, 0xa7, 0x62, 0xb8, 0xd9, 0xc5, 0x8c, 0xaa, 0xa4, 0x83, 0x8e, 0xcb, 0x70, 0x20, 0x42,
-		0x98, 0x84, 0x84, 0xa8, 0xac, 0xc0, 0xe6, 0x21, 0x40, 0x36, 0xb3, 0xea, 0xde, 0xf2, 0x42, 0x44,
-		0x16, 0x01, 0xb2, 0xe6, 0xcf, 0x20, 0x94, 0x30, 0xe7, 0x4a, 0x9b, 0xa6, 0x0e, 0x41, 0x11, 0xd0,
+		0x45, 0x54, 0xa7, 0x62, 0xb8, 0xd9, 0xc5, 0x8c, 0xaa, 0xa4, 0x83, 0x8e,
+		0xcb, 0x70, 0x20, 0x17, 0x9d, 0x18, 0xa3, 0xc6, 0x83, 0xaa, 0x73, 0x01,
+		0x02, 0xa7, 0x74, 0x23, 0x30, 0xcc, 0xa9, 0xfb, 0x19, 0x4a, 0x77, 0x01,
+		0xb5, 0x6d, 0x3d, 0xf1, 0xf2, 0x27, 0x8b, 0xef, 0x55, 0xe5, 0xbd, 0x92,
 	}
-	// 目标阵列 [RSP+0x1a]：种子 16 字节 + .rdata 0x1d448ca
+	// 目标阵列 [RSP+0x1a]：15 字节前缀 + .rdata 0x1d448ca
 	PoPoolDst48 = []byte{
-		0x78, 0x82, 0xdb, 0x93, 0xe6, 0x0b, 0xc5, 0xcd, 0xfe, 0xf3, 0xd0, 0xd7, 0x0e, 0xcf, 0x69, 0xb4,
-		0x01, 0xf8, 0xe9, 0xa8, 0xee, 0x29, 0x5a, 0x6f, 0xaf, 0xaa, 0xb3, 0x39, 0x4e, 0x57, 0xb0, 0x88,
-		0x8b, 0x71, 0xb2, 0x35, 0x3f, 0x85, 0x02, 0x71, 0x5c, 0xbe, 0x0a, 0x0f, 0x7c, 0xa5, 0x76, 0x48,
+		0x78, 0x82, 0xdb, 0x93, 0xe6, 0x0b, 0xc5, 0xcd, 0xfe, 0xf3, 0xd0, 0xd7,
+		0x0e, 0xcf, 0x69, 0x65, 0xf1, 0x6a, 0xec, 0x14, 0xd6, 0xf3, 0xb6, 0x54,
+		0x3f, 0xd8, 0x74, 0x66, 0x7f, 0x19, 0xf9, 0x44, 0x65, 0x8f, 0xc9, 0x3e,
+		0x22, 0xe0, 0xb3, 0x54, 0x1f, 0x58, 0xc4, 0x1f, 0x85, 0xe5, 0x01, 0xd7,
 	}
-	// 池头明文（0x116d0cf 的 SUB ESI,EDX 结果，48 字节全量核对）
-	PoPoolWant48 = []byte("3.41.2\x00ATOMIC_Irite\x00BitNot\x00OpenDup\x00OpenAutoindex")
+	// 池头明文（0x116d0cf 的 SUB ESI,EDX 结果；Go 链接器 buildinfo 块）
+	PoPoolWant48 = []byte("3.41.2\x00ATOMIC_INTRINSICS=1\x00COMPILER=msvc-1900\x00DE")
 )
 
 // PoPoolSubtract 是 0x116d0cf 的逐字节还原：out_i = dst_i - src_i（mod 256）。
@@ -205,6 +213,6 @@ var PoPoolVectors = []struct {
 		Name: "dispatcher pool head",
 		Dst:  PoPoolDst48,
 		Src:  PoPoolSrc48,
-		Want: []byte("3.41.2\x00ATOMIC_Irite\x00BitNot\x00OpenDup\x00OpenAutoindex"),
+		Want: []byte("3.41.2\x00ATOMIC_INTRINSICS=1\x00COMPILER=msvc-1900\x00DE"),
 	},
 }
