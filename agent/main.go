@@ -1825,6 +1825,13 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		// 「本机有哪些 TCP 连接」是可复现的事实（netstat/ss）。因此枚举本机
 		// 连接并逐条下发；字段文本为复刻端固定值。
 		// ⚠ 偏差：原版下发其连接池视图，复刻端下发本机连接表。
+		//
+		// ⚠ 帧形状未验证（2026-09-13）：本分支的**枚举/状态部分**是本机可复现且
+		// 已验证的（见下），但上面「N 字段记录」的描述取自分支摘要，**没有逐条
+		// 读该分支内的 FUN_0100d160/FUN_0100d440 调用点**。实测 0x16 的 case 体
+		// 只有 0x38 字节且只含一个 CALL（FUN_00fbfae0），并不含帧发射调用——说明
+		// 摘要所指的帧可能在别处或语义不同。因此本分支发出的帧形**不可当作已对齐**，
+		// 需要重读调用点后才能确认。枚举部分的正确性不受影响。
 		conns := listConnections()
 		if len(conns) == 0 {
 			return "", "connlist: no connections available"
@@ -1867,6 +1874,13 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		// 与本机可复现（同 netRoute/proclist）：接口是本机事实，
 		// 用 net.Interfaces 枚举即可；仅字段名与标签取自池（不可读）。
 		// ⚠ 偏差：下发本机接口，字段文本为复刻端固定值。
+		//
+		// ⚠ 帧形状未验证（2026-09-13）：本分支的**枚举/状态部分**是本机可复现且
+		// 已验证的（见下），但上面「N 字段记录」的描述取自分支摘要，**没有逐条
+		// 读该分支内的 FUN_0100d160/FUN_0100d440 调用点**。实测 0x16 的 case 体
+		// 只有 0x38 字节且只含一个 CALL（FUN_00fbfae0），并不含帧发射调用——说明
+		// 摘要所指的帧可能在别处或语义不同。因此本分支发出的帧形**不可当作已对齐**，
+		// 需要重读调用点后才能确认。枚举部分的正确性不受影响。
 		ifaces, err := net.Interfaces()
 		if err != nil || len(ifaces) == 0 {
 			return "", "iflist: no interfaces available"
@@ -1888,6 +1902,13 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 	case opCmdIfDetail:
 		// 原版 dec case 0x13：命中接口后逐项下发 5 字段记录
 		// （名称/标志/类型/ID/值）。
+		//
+		// ⚠ 帧形状未验证（2026-09-13）：本分支的**枚举/状态部分**是本机可复现且
+		// 已验证的（见下），但上面「N 字段记录」的描述取自分支摘要，**没有逐条
+		// 读该分支内的 FUN_0100d160/FUN_0100d440 调用点**。实测 0x16 的 case 体
+		// 只有 0x38 字节且只含一个 CALL（FUN_00fbfae0），并不含帧发射调用——说明
+		// 摘要所指的帧可能在别处或语义不同。因此本分支发出的帧形**不可当作已对齐**，
+		// 需要重读调用点后才能确认。枚举部分的正确性不受影响。
 		//
 		// 同 iflist：接口信息是本机事实，可从 net.Interface 直接得到
 		// （名称、Flags、MTU、HardwareAddr）。字段名不可读，标为偏差。
@@ -1921,21 +1942,34 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdNetRoute:
-		// 原版 dec case 0x16：FUN_00fbfae0 取当前接口，在 6 项接口表
-		// DAT_1e491a80 中匹配后 FUN_0100d160(4, idx, 1, n) 逐项下发。
+		// ⚠ 本分支的已提交实现**是错的**（2026-09-13 发现，未修）：不要再照着它做。
 		//
-		// 该表是 .data 的 **BSS** 段对象（RVA 0x1e091a80 > .data 文件映射上界
-		// 0x1e02d400），镜像里为零、init 期才写入——所以 6 项接口名与顺序静态
-		// 不可读。此前我把它当成「不在任何数据段」，那是把 Ghidra VA 当 RVA 比
-		// 对；地址本身没问题，缺的是它的**内容**。
+		// 记录在案的原描述（「FUN_00fbfae0 取当前接口 → 在 6 项接口表
+		// DAT_1e491a80 中匹配 → FUN_0100d160(4, idx, 1, n) 逐项下发」）**与反汇编
+		// 不符**。case 体（0x10969f5–0x1096a2d，仅 0x38 字节）实际是：
 		//
-		// 与 setDomain/setGateway 的区别正在这里：那两个分支只依赖「设置/清空/
-		// 回读」行为，故可实现；本分支要下发表中的项，依赖的是内容，不可复原。
+		//	10969f5  TEST RBX,RBX
+		//	10969f8  JNZ  0x1096a05
+		//	10969fa  MOV  R8D,0xffffffff      ; RBX==0 → 走这条
+		//	1096a00  JMP  0x10989ed           ; 长跳**离开**本 case
+		//	1096a05  MOV  RAX,[RSP+0x538]
+		//	1096a0d  CALL 0x00fbfae0          ; 取当前接口，唯一 CALL
+		//	1096a12  MOV  [RSP+0x60],EAX
+		//	1096a16  MOV  RCX,[RSP+0x538]
+		//	1096a1e  MOV  RBX,[RSP+0x1f0]
+		//	1096a26  XOR  EDX,EDX
+		//	1096a28  JMP  0x109894a           ; 交给共享尾部
 		//
-		// 复刻端仍可实现**一半**：取当前接口表与索引（Go 的 net.Interfaces +
-		// net.InterfaceByName），用原版的帧码 4（FUN_0100d160(4, idx, 1, n)）
-		// 本地选出条目并下发。下发的是本机的接口，不是原版那份 6 项表——故
-		// 该实现标注为偏差。
+		// 即：本 case **不发射任何帧**（体内无 FUN_0100d160/FUN_0100d440 调用），
+		// 只算出接口索引并把 RDX 清零后跳到共享尾部 0x109894a；RBX==0 时跳
+		// 0x10989ed。真正的帧组装在这两处尾部里，尚未读。
+		//
+		// 因此现存的实现（用 net.Interfaces 选接口 + emitFrames 发行
+		// FUN_0100d160(4,...) 帧）是**按我自己写错的注释实现的**，帧码与时机都无
+		// 依据。之所以不在此处修补：正确形状在共享尾部，而本轮我在字节级地址
+		// 换算上连续出错（六次），继续猜只会再错一次。
+		// 修法：读 0x109894a 与 0x10989ed 两个尾部的调用点，确定帧码与字段，
+		// 再重写本分支；在此之前不要把它当作已对齐。
 		ifaces, err := net.Interfaces()
 		if err != nil || len(ifaces) == 0 {
 			return "", "netroute: no interfaces available"
@@ -1948,9 +1982,6 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 			}
 		}
 		name := ifaces[idx].Name
-		// 原版帧：FUN_0100d160(4, idx, 1, n)
-		emitFrames([]resultFrame{{Kind: 4, A: 1, B: uint32(len(name))}})
-		emitStringFrames(name)
 		return fmt.Sprintf("netroute %d %s", idx, name), ""
 
 	case opCmdMtu:
@@ -2121,6 +2152,13 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		// PID 用本机值，标签用固定文本并标注偏差。
 		//
 		// ⚠ 偏差：原版下发的是其会话表里的进程视图与运行期标签串；复刻端
+		//
+		// ⚠ 帧形状未验证（2026-09-13）：本分支的**枚举/状态部分**是本机可复现且
+		// 已验证的（见下），但上面「N 字段记录」的描述取自分支摘要，**没有逐条
+		// 读该分支内的 FUN_0100d160/FUN_0100d440 调用点**。实测 0x16 的 case 体
+		// 只有 0x38 字节且只含一个 CALL（FUN_00fbfae0），并不含帧发射调用——说明
+		// 摘要所指的帧可能在别处或语义不同。因此本分支发出的帧形**不可当作已对齐**，
+		// 需要重读调用点后才能确认。枚举部分的正确性不受影响。
 		// 用本机进程列表代替，语义等价、文本不保证一致。
 		procs := listProcesses()
 		if len(procs) == 0 {
@@ -2138,6 +2176,13 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		//
 		// 同 proclist：枚举本机服务这一步可复现，池里的标签不可读。
 		// ⚠ 偏差：下发本机服务列表，标签为固定文本。
+		//
+		// ⚠ 帧形状未验证（2026-09-13）：本分支的**枚举/状态部分**是本机可复现且
+		// 已验证的（见下），但上面「N 字段记录」的描述取自分支摘要，**没有逐条
+		// 读该分支内的 FUN_0100d160/FUN_0100d440 调用点**。实测 0x16 的 case 体
+		// 只有 0x38 字节且只含一个 CALL（FUN_00fbfae0），并不含帧发射调用——说明
+		// 摘要所指的帧可能在别处或语义不同。因此本分支发出的帧形**不可当作已对齐**，
+		// 需要重读调用点后才能确认。枚举部分的正确性不受影响。
 		svcs := listServices()
 		if len(svcs) == 0 {
 			return "", "svclist: no services available"
