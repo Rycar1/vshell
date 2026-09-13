@@ -240,7 +240,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdScreenshot, opCmdConnStat, opCmdSysList,
 		opCmdPortMapDump, opCmdPipeDump,
 		opCmdProxyList, opCmdSysList2,
-		opCmdPing, opCmdHostScan, opCmdFileList,
+		opCmdHostScan, opCmdFileList,
 		opCmdFwdPort,
 	}
 	for _, op := range pending {
@@ -614,5 +614,18 @@ func TestTcpPingIsImplemented(t *testing.T) {
 	small := append([]byte{opCmdTcpPing}, []byte("0x0a")...)
 	if _, e := dispatchNativeCommand(1, opCmdTcpPing, small, 5); e != "" {
 		t.Fatalf("tcpping(set 0x0a) returned error %q", e)
+	}
+}
+
+// 0x1b (ping) implemented. Arm selection is fold(cmdname[0]) == 'p': that arm emits
+// 0xb1 then 0x54(seq,1,0); otherwise the argument is parsed, clamped to
+// [0, 0xfffffffe] (parse failure -> 0), and emitted in 0xb2 before the same 0x54.
+func TestPingIsImplemented(t *testing.T) {
+	if _, e := dispatchNativeCommand(1, opCmdPing, []byte{opCmdPing}, 5); e != "" {
+		t.Fatalf("ping (no arg) returned error %q", e)
+	}
+	in := append([]byte{opCmdPing}, []byte("0x10")...)
+	if _, e := dispatchNativeCommand(1, opCmdPing, in, 5); e != "" {
+		t.Fatalf("ping(set) returned error %q", e)
 	}
 }

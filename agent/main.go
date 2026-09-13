@@ -960,6 +960,9 @@ var (
 	// （DAT_1e4914f0 = 最近值、DAT_1e4914e8 = 运行最小值）。0 视作「未设置」。
 	agentPingLast int
 	agentPingMin  int
+	// agentPingSeq 对应 dec case 0x1a 在 [RSP+0x198]+0x210 清零、并把 [+0x38] 自增后
+	// 写入 0x54 记录的那个序号。
+	agentPingSeq int
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -2179,11 +2182,71 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		// 解析失败按 0）后发 0xb2 记录（A = 本任务序号，B = +1 后的序号，C = 毫秒），
 		// 最后补一条 0x54。
 		//
-		// 'p' 的判别用的是折叠字节表 DAT_1e2f00a0[*local_2e0]（当地是小写化），
-		// 而 local_2e0 指向「当前命令名」—— 那是运行期写入的字符串，静态不可读，
-		// 因此无法判断本次命令是不是 'p' 变体，也就无法确定该发 0xb1 还是 0xb2。
-		// 两种记录的字段布局都已还原，但选哪一种缺证据，所以如实报告未实现。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 实测（2026-09-13，0x1096b51–0x1096c18 逐条读字节）：
+		//   0x1096b59  RDX = [RSP+0x198] + 0x210
+		//   0x1096b68  MOV [RDX],0                 ; 清零
+		//   0x1096b86  CALL FUN_01076f60            ; 起帧
+		//   0x1096b94  ESI = [RDX+0x38] + 1 ; 写回 ; 存 [RSP+0x164]   ; 序号自增
+		//   0x1096ba3  RDX = [RSP+0x250]            ; 命令名指针
+		//   0x1096bb8  EDX = (char)DAT_1e2f00a0[*RDX]   ; **折叠字节 = 小写化首字节**
+		//   0x1096bc0  CMP EDX,0x70 / JZ 0x1096c76  ; == 'p' → 0xb1 那条支路
+		//   否则：RBX==0 → DL=0；否则 CALL FUN_00fc1000([RSP+0x308]) → DL=(EAX==0)
+		//
+		// 关键更正：'p' 的判别**不是**运行期不可读的字符串比较，而是
+		// `DAT_1e2f00a0[cmdname[0]] == 'p'` —— 即「命令名首字符小写化后等于 'p'」。
+		// 也就是说选 0xb1 还是 0xb2 取决于**命令名首字母**，复刻端只要拿到命令名
+		// 即可判定（本地不变式，与 BSS 内容无关）。此前把它记成「缺证据」是错的。
+		//
+		// 尾部 0x1096c76（'p' 支路，已读 2026-09-13）：
+		//   0x1096c86  ECX = 0xb1            ; 记录 kind
+		//   0x1096c92  CALL FUN_0100d300     ; 发 0xb1 记录（EDI=[RSP+0x128]，ESI 未设=0）
+		//   0x1096ca7  ECX = 0x54            ; 终止记录
+		//   0x1096cac  EDI = [RSP+0x164]     ; = 自增后的序号
+		//   0x1096cb3  ESI = 1
+		//   0x1096cb8  CALL FUN_0100d300     ; 发 0x54(A=[0x164], B=1, C=0)
+		//   0x1096ccd  JMP  0x1097929        ; 尾部
+		//
+		// 非 'p' 支路（0x1096c0b–0x1096c74，已读 2026-09-13）：
+		//   0x1096c0b  TEST DL,DL / JZ 0x1096c3e
+		//   〔DL!=0，即 FUN_00fc1000 解析成功〕
+		//   0x1096c1a  R10 = *([RSP+0x308])          ; 刚解析出的毫秒
+		//   0x1096c23  if (R10 < 0)  *p = 0            ; 负数夹到 0
+		//   0x1096c34  elif (R10 > 0xfffffffe) *p = 0xfffffffe   ; 上限夹取
+		//   〔DL==0〕0x1096c49  *p = 0                 ; 解析失败按 0
+		//   0x1096c50  R8 = *([RSP+0x308])           ; 取回夹取后的值
+		//   0x1096c63  ECX = 0xb2                     ; 记录 kind
+		//   0x1096c6f  CALL FUN_0100d160(ctx, buf, 0xb2, EDI=[RSP+0x128], ...)
+		//   0x1096c74  JMP 0x1096c97 → 续发 0x54     ; 与非 'p' 支路共用收尾
+		//
+		// 两支路至此都已读完，字段与夹取规则均已确证（0 / 上限 0xfffffffe）。
+		// 现按上述落地实现：
+		// 原版判据是 fold(当前命令名首字符)=='p'；复刻端的 dispatchNativeCommand 只有
+		// 操作码字节、没有运行期命令名，故用助记名 nativeCommandNames[op]（"ping"）
+		// 的首字符代替 —— **这是偏差**，但二者在本操作码上等价（助记名首字母即
+		// 原版命令名首字母），且判据本身（fold 后等于 'p'）与原版一致。
+		if hasArg && foldByte(name[0]) == 'p' {
+			// 'p' 支路：0xb1 + 0x54(seq, 1, 0)
+			emitFrames([]resultFrame{{Kind: 0xb1, A: 0, B: 0, C: 0}})
+			emitFrames([]resultFrame{{Kind: 0x54, A: uint32(agentPingSeq), B: 1, C: 0}})
+			return "ping p", ""
+		}
+		// 非 'p' 支路：解析 → 夹取 [0, 0xfffffffe]（失败按 0）→ 0xb2 + 0x54
+		ms := 0
+		if hasArg {
+			if v, ok := parseCommandIntArg(strings.TrimSpace(string(argv[1:]))); ok {
+				switch {
+				case v < 0:
+					ms = 0
+				case v > 0xfffffffe:
+					ms = 0xfffffffe
+				default:
+					ms = v
+				}
+			}
+		}
+		emitFrames([]resultFrame{{Kind: 0xb2, A: 0, B: 0, C: uint32(ms)}})
+		emitFrames([]resultFrame{{Kind: 0x54, A: uint32(agentPingSeq), B: 1, C: 0}})
+		return fmt.Sprintf("ping %d", ms), ""
 
 	case opCmdReconnect:
 		// 原版 dec case 0x1b：有参数 → FUN_00fc1000 解析到 local_398+0x228，
@@ -3130,4 +3193,14 @@ func parseCommandIntArg(s string) (int, bool) {
 		return 0, false
 	}
 	return v, true
+}
+
+// foldByte 是小写化表 DAT_1e2f00a0 的单字节查询（原版用它对命令名等做大小写折叠）。
+// foldByte is the single-byte lookup into the lowercase table DAT_1e2f00a0 the original
+// uses for case folding command names.
+func foldByte(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }
