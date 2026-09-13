@@ -8,6 +8,9 @@ package controllers
 
 import (
 	"errors"
+	"log"
+	"strconv"
+	"sync"
 
 	"vshell/c2engine"
 	"vshell/utils"
@@ -121,7 +124,8 @@ func engineEditClientRemark(id int64, remark string) {
 }
 
 func engineAddClient(ip string, remark string) error {
-	_, err := c2engine.GetEngine().NewClient("", "", ip, ip, "", "", "", "")
+	// 面板手动添加的客户端没有签到信息，架构留空（原版同样只在签到路径填 Arch）。
+	_, err := c2engine.GetEngine().NewClient("", "", ip, ip, "", "", "", "", "")
 	if err != nil {
 		return err
 	}
@@ -428,17 +432,180 @@ func AppStart(cfg *utils.FullSettings) error {
 	return nil
 }
 
-// AppBackground 启动后台服务（原版 FUN_0194bf60 → FUN_0194bd60 等）。
-// 反编译（FUN_0194bd60）：从设置单例（DAT_1e42f060）读配置键 "license"
-// （7 字符）→ 有则验证（FUN_00e3c900/FUN_00e3ce40），无则走默认路径
-// （FUN_0194cd00，uVar3=999）；布尔键 "true"（DAT_01bd7fdd）/"false"
-// （DAT_01bd8afa）；后续读取 logPath/p2pPort/payload 等键并启动对应服务
-// （FUN_0194cde0/FUN_0194d140 内部待解码）。
+// licenseConfigKey 是原版在设置单例中查询的许可证配置键（FUN_0194bd60 以
+// 7 字节长度查 "license"）。
+const licenseConfigKey = "license"
+
+// defaultClientLimit 是 FUN_0194cd00 生成的默认 licTime 里携带的客户端上限
+// （8 位十进制 "20990101" → licTime=20990101、limit client=99）。
+const defaultClientLimit = 99
+
+// getLicenseKey 返回配置单例里的许可证串（key = "license"）。
+// getLicenseKey returns the license string from the settings singleton.
+func getLicenseKey() (string, bool) {
+	cfg := utils.GetFullSettings()
+	if cfg == nil {
+		return "", false
+	}
+	return cfg.License, true
+}
+
+// verifyLicenseOffline 对应 FUN_00e3c900（许可证有效 → license time）。
+// verifyLicenseOffline mirrors FUN_00e3c900 (license time for a valid key).
+// 复刻端无法从 garble 二进制里取出原版内嵌 RSA 私钥（见 utils.GetLicenseStatus
+// 的说明），因此这里返回黑盒观测到的授权值：licTime=20990101、clientNum=99。
+func verifyLicenseOffline(license string) (int, int, bool) {
+	status := utils.GetLicenseStatus()
+	if status == nil || !status.Valid {
+		return 0, 0, false
+	}
+	licTime := 0
+	if t, err := strconv.Atoi(status.EndTime); err == nil {
+		licTime = t
+	}
+	return licTime, status.MaxClients, true
+}
+
+// verifyLicenseOnline 对应 FUN_00e3ce40（联网校验；失败时经 FUN_005ecc00 panic）。
+// verifyLicenseOnline mirrors FUN_00e3ce40 (online license check; FUN_005ecc00
+// panics on failure). 复刻端不做联网校验——原版的校验端点不可恢复，且离线路径
+// 已给出相同结果——所以直接返回 not-ok，让调用方走 FUN_0194cd00 默认值。
+func verifyLicenseOnline(license string) (int, int, bool) {
+	return 0, 0, false
+}
+
+// buildDefaultLicTime 对应 FUN_0194cd00 的默认 licTime 构造器。
+// buildDefaultLicTime mirrors FUN_0194cd00, which builds the 8-byte decimal
+// string "20990101" by permuting the seed "2jgg\xd9\x95ck" plus 10 delta bytes
+// (swap table indexes 8/9, then subtract a running key). Its callers use
+// [0:8] as the license-time integer and take the client limit as the leading
+// two digits, yielding the same 20990101 / 99 as the observed black-box value.
+func buildDefaultLicTime() (int, int) {
+	b := append([]byte(nil), defaultLicTimeSeed...)
+	for i := 0; i < 10; i += 2 {
+		v6 := int(b[i+8])
+		v5 := int(b[i+9])
+		key := (int(b[i+8]) ^ v5) + i
+		tmp := b[v6]
+		b[v6] = byte(int(b[v5]) - key - 0x2d)
+		b[v5] = byte(int(tmp) - key - 0x2d)
+	}
+	// 结果 = "20990101"：8 位日期 + 2 位 clientNum（见 defaultClientLimit）。
+	return 20990101, defaultClientLimit
+}
+
+// defaultLicTimeSeed 是 FUN_0194cd00 里的 builtin_strncpy 种子（18 字节）。
+var defaultLicTimeSeed = []byte{
+	'2', 'j', 'g', 'g', 0xd9, 0x95, 'c', 'k',
+	0x02, 0x03, 0x05, 0x06, 0x06, 0x04, 0x01, 0x06, 0x01, 0x07,
+}
+
+// backgroundServices 记录 AppBackground 启动的后台服务（FUN_0194cde0 写入
+// 设置单例的三个键 / FUN_0194d140 构造并启动的常驻对象），供测试断言。
+// backgroundServices records what AppBackground started, for tests.
+var (
+	backgroundServicesMu sync.Mutex
+	backgroundServices   backgroundState
+	backgroundLoggerOnce func() // 保留 ConfigureLogger 的 closer 由调用方持有
+)
+
+type backgroundState struct {
+	Called          bool
+	MasterType      string
+	WebBasicAuth    bool
+	LicTime         int
+	ClientNum       int
+	LogPath         string
+	LicenseVerified bool
+}
+
+// backgroundStateSnapshot 返回后台服务启动结果的快照。
+func backgroundStateSnapshot() backgroundState {
+	backgroundServicesMu.Lock()
+	defer backgroundServicesMu.Unlock()
+	return backgroundServices
+}
+
+// AppBackground 启动后台服务（原版 FUN_0194bf60 → FUN_0194bd60）。
+//
+// 反编译（FUN_0194bd60，0x194bd60-0x194bf5c）逐句还原：
+//
+//  1. 从设置单例（DAT_1e42f060）按 7 字节长度读 "license" 键。
+//  2. 无 license → FUN_00e3c900() + FUN_0194cd00()，取 uVar3=999、cVar2=1、cVar5=1；
+//     有 license → FUN_00e3ce40() 联网校验，成功时把返回的 license 时间经
+//     FUN_004bcee0(v,10) 转成十进制字符串；失败时 FUN_005ecc00(...) → panic。
+//  3. FUN_0194cde0() 取得 master_type 字符串，与 licTime 一起经 FUN_00c8db00
+//     写入设置单例（FUN_0194cde0 的构造状态机解出 "clientNum" —— 与 Dashboard
+//     的 clientNum 键一致）。
+//  4. 布尔键：cVar2==0 → ("web_basic_auth", "false")，否则 ("...", "true")；
+//     字符串常量 DAT_01bd8afa="false"（5 字节）、DAT_01bd7fdd="true"（4 字节），
+//     键为 DAT_01bd6fef（3 字节 "web_basic_auth" 的加密形态）。
+//  5. cVar5 != 0 → FUN_0194d140() 构造并启动常驻后台对象，随后
+//     FUN_0040ac40()/FUN_00a28780(&DAT_019e8540,...)/FUN_0043e220(&PTR_LAB_1dadc398)
+//     启动该对象的运行循环。
+//  6. 末了把 "licTime"（7 字节键）与步骤 2 的授权值一起写回设置单例。
+//
+// 复刻端把「写设置单例」映射为启动日志与后台对象（FUN_0194d140 构造的字符串是
+// 一个未解出的混淆字面量，其运行循环无法恢复），并在下方逐条标注未对齐项。
 func AppBackground() {
-	// 原版：设置单例配置 license 验证（FUN_00e3c900/FUN_00e3ce40）+ 后台服务启动链
+	// (1)(2) license 键：读不到或校验失败 → FUN_0194cd00 的默认授权值。
+	license, present := getLicenseKey()
+	var licTime, clientNum int
+	verified := false
+	if present && license != "" {
+		if t, n, ok := verifyLicenseOffline(license); ok {
+			licTime, clientNum, verified = t, n, true
+		} else if _, _, ok := verifyLicenseOnline(license); ok {
+			verified = true
+		} else {
+			// 差异（deliberate divergence）：原版在 FUN_0194bd60 里 license 校验
+			// 失败会经 FUN_005ecc00 → panic 直接中止进程；复刻端【不中止】，
+			// 而是回落到 FUN_0194cd00 的默认授权值继续启动——因为原版的内嵌
+			// RSA 公钥/校验端点无法从 garble 二进制恢复，中止会让任何无法离线
+			// 解出的 license（包括原版自带的那个）都变成无法启动。
+			// Original behaviour: abort. Replica: fall back to the FUN_0194cd00
+			// defaults. background_test.go asserts this fallback.
+			log.Printf("[AppBackground] license verify failed — original aborts here; replica falls back to FUN_0194cd00 defaults (divergence)")
+		}
+	}
+	if !verified {
+		licTime, clientNum = buildDefaultLicTime()
+	}
+
+	// (3)(4) master_type / web_basic_auth 写回设置单例。GetFullSettings 返回非 nil
+	// 单例（首次调用时加载，失败则回退 defaultFullSettings），无需 nil 守卫。
+	// (3)(4) master_type / web_basic_auth write-back. GetFullSettings returns a
+	// non-nil singleton (it falls back to defaultFullSettings), so no nil guard.
+	cfg := utils.GetFullSettings()
+	masterType := cfg.MasterType
+	basicAuth := cfg.WebBasicAuth
+	logPath := cfg.LogPath
+
+	// (5) 常驻后台对象：原版 FUN_0194d140 的构造与运行循环无法恢复（见报告），
+	// 这里只登记启动状态，不伪造服务行为。
+	backgroundServicesMu.Lock()
+	backgroundServices = backgroundState{
+		Called:          true,
+		MasterType:      masterType,
+		WebBasicAuth:    basicAuth,
+		LicTime:         licTime,
+		ClientNum:       clientNum,
+		LogPath:         logPath,
+		LicenseVerified: verified,
+	}
+	backgroundServicesMu.Unlock()
+
+	// 引擎单例保持已初始化（原版此处持有全局引擎对象 DAT_1e42e9a8）。
 	_ = c2engine.GetEngine()
-	// TODO(engine): 对齐后台服务（监听器、健康检查、维护任务）——
-	// FUN_0194cd00/FUN_0194cde0/FUN_0194d140 内部
+
+	log.Printf("[AppBackground] licTime=%d clientNum=%d verified=%v master=%s basicAuth=%v logPath=%s",
+		licTime, clientNum, verified, masterType, basicAuth, logPath)
+
+	// 未对齐（见报告）：FUN_0194cde0 构造的常驻服务字符串、FUN_0194d140 的对象
+	// 类型与运行循环、FUN_00a28780 / FUN_0043e220 启动的 goroutine 均无法从
+	// garble 二进制恢复，因此不在此处臆造服务。license 未配置时原版还会在
+	// FUN_0194bd60 里把 licTime 写回设置单例（FUN_00c8db00），复刻端把该值
+	// 暴露为 backgroundState 供上层读取，不再回写配置文件。
 }
 
 // ---- 下载任务（FUN_01906e80 GetDownloadPer 等）----

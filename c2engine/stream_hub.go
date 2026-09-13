@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -168,7 +167,8 @@ func ClearStreamSession(kind string, clientID int64) {
 	}
 }
 
-// publish 把一帧载荷投递给某客户端某类流的全部查看者，返回投递到的查看者数。// publish fans a payload out to every viewer of (kind, clientID); it returns
+// publish 把一帧载荷投递给某客户端某类流的全部查看者，返回投递到的查看者数。
+// publish fans a payload out to every viewer of (kind, clientID) and returns
 // how many viewers accepted it.
 func publish(kind streamKind, clientID int64, payload []byte, binary bool) int {
 	streamMu.RLock()
@@ -258,6 +258,14 @@ func StreamSessionTaskID(kind string, clientID int64) int64 {
 // compressStreamFrame zlib-compresses a screen frame. The SPA inflates every
 // binary screen message before handing it to <img> (module F in
 // static/assets/vBhoZX99Z.js is pako's zlib inflate).
+//
+// 压缩级别是占位值（zlib.BestSpeed），不是原版参数：原版屏幕通道的质量
+// 换算函数尚未定位，quality 目前只用于构造 screen_capture_start（见
+// controllers/screen.go 的 screenCaptureParams，同样标为占位）。SPA 只要求
+// "能 inflate"，因此任意合法 zlib 级别都能工作——但不要把它当成对齐结果。
+//
+// The level is a placeholder, not the original's parameter: only "the SPA must be
+// able to inflate it" is established, and any valid zlib level satisfies that.
 func compressStreamFrame(img []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
@@ -271,14 +279,6 @@ func compressStreamFrame(img []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// ParseStreamParam 解析查看会话查询参数里的整型值（quality 等）。
-// ParseStreamParam parses an integer value (quality, etc.) from a viewing
-// session's query parameters.
-func ParseStreamParam(v string) int {
-	n, _ := strconv.Atoi(v)
-	return n
 }
 
 func parseStreamKind(kind string) streamKind {

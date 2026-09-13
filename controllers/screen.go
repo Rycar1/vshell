@@ -74,10 +74,24 @@ func serveScreenViewer(w http.ResponseWriter, r *http.Request, id int64, quality
 
 // ---- 引擎阶段对齐 ----
 
-// screenCaptureParams 把前端的清晰度枚举换算成采集参数。
-// The SPA's 清晰度 radio offers 高/中/低 → "big"/"normal"/"small"
-// (static/assets/vn-sfWjBP.js). quality drives the JPEG quality and frame rate
-// the agent's capture loop is started with.
+// screenCaptureParams 把前端的清晰度枚举映射成采集参数。
+//
+// ⚠ 占位值，不是对齐 / PLACEHOLDER VALUES, NOT ALIGNED.
+// 前端确实发送这三个字面量（static/assets/vn-sfWjBP.js 的 清晰度 单选：
+// 高/中/低 → "big"/"normal"/"small"，默认 "normal"），但**数值本身未经反编译
+// 验证**：原版对应的质量/帧率换算函数尚未定位（占位 — 来源函数未知），因此
+// 这里的三组数字是按直观大小关系编造的。
+// 已知后果：quality 是字符串，任何把它当整数解析的写法都得到 0，所以下游若
+// 用 Atoi(quality) 取值，该参数恒为死值——本函数绕过该问题靠的是枚举匹配。
+// ⚠ 不要把 FUN_019146e0 的语义用在这里：那是 po 字符串解码器的写字节闭包
+// （out_i = v_i − seed_i），屏幕压缩与它无关。共享原语可以，据此推导质量参数
+// 就是又一次 0x458f00 式的误判。
+//
+// The SPA sends these three literals (清晰度 radio in static/assets/vn-sfWjBP.js:
+// 高/中/低 → "big"/"normal"/"small", default "normal"), but the NUMBERS are
+// invented: the original's quality/framerate conversion has not been located
+// (placeholder — source function not yet identified). Note `quality` is a
+// string, so any int-conversion of it yields 0 and would be a dead parameter.
 func screenCaptureParams(quality string) (q, fps int) {
 	switch quality {
 	case "big":
