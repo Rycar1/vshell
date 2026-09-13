@@ -956,6 +956,10 @@ var (
 	agentDomain string
 	// agentGateway 对应 dec case 0xa 的全局 DAT_1e490968（前置/网关地址）。
 	agentGateway string
+	// agentPingLast / agentPingMin 对应 FUN_00fb7e60 写的两个 .data 全局
+	// （DAT_1e4914f0 = 最近值、DAT_1e4914e8 = 运行最小值）。0 视作「未设置」。
+	agentPingLast int
+	agentPingMin  int
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -1645,6 +1649,10 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("interval %d", sleepTime), ""
 
 	case opCmdScreenshot:
+		// 实测调用列表（2026-09-13，0x10958f2–0x1095a5c，逐条读字节）：
+		//   FUN_0100fa40（标记该类任务处理中）、FUN_0100e1a0 ×2（建记录/同步点）、
+		//   FUN_00fc1620（4 字节参数解析）、FUN_0100dfa0（收尾）。
+		//
 		// 原版 dec case 0x1：FUN_0100fa40 标记该类任务正在处理，然后按
 		// local_330[2]（该命令所属「任务类别」）分两种结果帧：
 		//   local_330[2] == 1 且 local_280[6] 的 bit28 已置 → 记录种类 0xb8；
@@ -1707,9 +1715,16 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("send state %d", agentSendField), ""
 
 	case opCmdTunnelLog:
-		// 原版 dec case 0x6：无参数 → FUN_0109c340 读并下发；有参数 →
-		// FUN_00fc1280 解析数值写入 local_398+0x224 后 FUN_00fee120 应用，
-		// 再用 FUN_01094220 把 local_280[6] 的 bit5 置位/清位并 FUN_01094c40 落盘。
+		// 原版 dec case 0x6（0x1095d13–0x1095d90）实测（2026-09-13，逐条读字节）：
+		//   0x1095d13  TEST RBX,RBX / JZ 0x1095d56   ; 无参数走另一支
+		//   0x1095d20  CALL FUN_00fc1620            ; 4 字节大端参数解析
+		//   0x1095d25  MOV RCX,[RSP+0x290]
+		//   0x1095d2d  MOV RCX,[RCX+0x18]
+		//   0x1095d31  MOV [RCX+0x74],EAX           ; 写入 [obj+0x18]+0x74
+		//   0x1095d34  ... CALL FUN_00fee040        ; 应用到连接
+		//   （另有 CALL FUN_01094a20 = 标量发射器 → 与发射器清单一致：0x06 体内发射）
+		// 此前注释里的 FUN_00fc1280 / FUN_00fee120 / local_398+0x224 **三个地址均错**，
+		// 现按字节改正。
 		if hasArg {
 			agentTunnelLogLevel = arg
 			if arg != 0 {
@@ -1722,8 +1737,10 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("tunnel log %d", agentTunnelLogLevel), ""
 
 	case opCmdTunnelDump:
-		// 原版 dec case 0x7：只处理有参数的情形 —— FUN_01094220 解析布尔后
-		// FUN_010836e0(local_280, bool) 落盘。无参数时无任何回包。
+		// 原版 dec case 0x7（0x1095ee5–0x1095f17）实测（2026-09-13）：**全 case 体内
+		// 一条 CALL 都没有**（整段扫描结果为空）。也不调用发射器（与清单一致）。
+		// 即它只做纯状态赋值，没有解析函数、没有落盘函数。
+		// 此前注释里的 FUN_01094220 与 FUN_010836e0 **均未被调用**，现按字节改正。
 		if hasArg {
 			on := 0
 			if argv[1] != '0' {
@@ -1846,8 +1863,17 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdPingIntv:
-		// 原版 dec case 0x10：FUN_00fc1000 解析 → FUN_00fb7e60 取值/设值。
-		// 原版把该值放在 local_330（命令记录）上，而不是客户端结构里。
+		// 原版 dec case 0x10（0x1096445–0x1096488）实测（2026-09-13）：**全 case 体内
+		// 一条 CALL 都没有**（对整段区间扫描，结果为空）。可见指令为：
+		//   0x1096445  MOV RDX,[RSP+0x2b0]
+		//   0x1096455  MOV EDX,[RDX+0x2c]
+		//   0x1096458  BT  EDX,5 / SETC DL           ; 读状态位 bit5
+		//   0x109645f  MOV [R8+0x38],0x6             ; 命令对象状态字段置 6
+		//   0x1096467  MOVZX ESI,DL / MOV [RSP+0x148],ESI   ; 该位作为结果
+		// 即：它是一个纯状态读取（不解析参数、不调发射器），返回值就是那个位。
+		// 此前注释里的 FUN_00fc1000 / FUN_00fb7e60 **并未被调用**，现按字节改正；
+		// 复刻端的行为（保存并回报间隔值）与「读取并回报」在语义上等价，
+		// 但不发帧这一点此前注释未说明。
 		if hasArg {
 			agentPingInterval = arg
 		}
@@ -1855,16 +1881,69 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("ping interval %d", agentPingInterval), ""
 
 	case opCmdTcpPing:
+		// ⚠ 已完整读出（见下），但**尚未落地为代码**：本条当前仍返回
+		// "not implemented"（见文件末的 default 分支与 TestDispatchNativeCommandUnimplemented）。
+		//
+		// 实测（2026-09-13，逐条读字节，0x1096488–0x109654c）：体内实际调用
+		//   FUN_00fc1000（参数解析）、FUN_00fb7e60 ×3（取值/设值）、
+		//   **FUN_01094a20（标量发射器）**
+		// 即它**发一条标量帧**，不是此前注释写的「0x47→0x3e→0x54→0x56→0x3b
+		// 五条记录序列，需要 0x3e 的回填序号」。注释里的 FUN_01077120 与
+		// FUN_0100e480 **均未被调用**。
+		//
 		// 原版 dec case 0x11：FUN_01077120 起帧后按序号/次数建五种记录 ——
 		// 0x47(值 = 次数, B = local_408) → 0x3e（取得序号 local_468）→
 		// 0x54(1, 1) → 0x56(1, 0xffffffff) → 0x3b(1, local_468) →
 		// FUN_0100e480 收尾。次数由 FUN_00fc1280 解析，无参数或 ≤ 0 → 0x7fffffff。
 		//
-		// 未实现的原因：0x56 / 0x3b 两条记录取的是 0x3e 记录的「返回序号」，
-		// 该值由服务器侧经 FUN_0100eac0 回填后才存在；复刻端没有这条回填链路，
-		// 发出缺字段的帧等于伪造。次数本身可从参数算出，但只发一半的帧序列
-		// 会让对端把结果判成损坏。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 剩余未知已收窄到一步（2026-09-13）：FUN_00fb7e60 已读，是个普通
+		// get/set + 运行期最小值，不依赖任何运行期身份或池文本：
+		//	int FUN_00fb7e60(ctx, v) {
+		//	    if (FUN_010fb3c0() != 0) return -1;      // 守卫
+		//	    old = DAT_1e4914f0;
+		//	    if (v >= 0) { DAT_1e4914f0 = v;
+		//	                  if (v < DAT_1e4914e8 || DAT_1e4914e8 == 0) DAT_1e4914e8 = v; }
+		//	    return old;                              // 取回的是**先前值**
+		//	}
+		// 即三个 .data 全局 + 一个参数即可建模，-1 表示「未设置」，最小值单独留存。
+		// 因此本分支不再受回填链路阻塞（那是 iflist 0x13 的问题，见 README）。
+		// 该参数解析器也已读（2026-09-13），语义如下：
+		//	FUN_00fc1000(ctx, char *s, int *out)
+		//	  - 若 s 以 "0x"/"0X" 开头 → 16 进制解析：跳过前导 '0'，逐字符查
+		//	    数字表 DAT_1e2ee9a0（>>3 & 1 判是否为数字），acc = acc*0x10 + 位值；
+		//	    **最多 0x10 位**（0x11 位及以上判失败返回 2）；成功写 *out 返回 0。
+		//	  - 否则 → 交由 FUN_00fc0d00(ctx, s, out, len(s), 1)（十进制/文本路径）
+		//	    ，返回值即其返回值。
+		//	    （注意 NUL 检查写在解引用之后，属原版既有写法。）
+		//
+		// 全分支算法已逐条读完（0x1096488–0x109654c，2026-09-13）：
+		//   RBX==0 → 跳过，DL=0（无参数）
+		//   否则 CALL FUN_00fc1000([RSP+0x198]+0x290) → EAX==0 视为解析成功 → DL=1
+		//   DL==0 → 跳到 0x109650b
+		//   DL!=0 → FUN_00fb7e60(ctx,-1) 取**先前值** RAX；
+		//            RBX = *([RSP+0x198]+0x290)（刚解析出的值）
+		//            if (RBX > 0) { if (RAX == 0 || RAX > RBX) FUN_00fb7e60(ctx,RBX) }
+		//   0x109650b: FUN_00fb7e60(ctx,-1) 再取一次 → RAX
+		//              FUN_01094a20(ctx, RAX) —— 发**一条标量帧**（发射器）
+		//              JMP 0x1097929（尾部）
+		//
+		// 即：解析出的值写入全局（并维护运行最小值），随后**回据上一次的值**发一条标量帧；
+		// 无参数或解析失败时只回据不写入。全程不发射其它记录，也不依赖任何回填。
+		//
+		// 现已按上述算法实现（帧经 FUN_01094a20 = emitScalarFrames，与原版一致）：
+		// 解析出的值仅在 > 0 且（无先前值 或 先前值更大）时写入 —— 即只接受更小的
+		// 值（配合 FUN_00fb7e60 内维护的最小值，这是一个「最小往返时延」的状态）。
+		// 无论是否写入，回包都是**先前值**。
+		prev := agentPingLast
+		if hasArg {
+			if v, ok := parseCommandIntArg(strings.TrimSpace(string(argv[1:]))); ok && v > 0 {
+				if prev == 0 || prev > v {
+					agentPingMin = setPingValue(v, agentPingMin)
+				}
+			}
+		}
+		emitScalarFrames(prev)
+		return fmt.Sprintf("tcpping %d", prev), ""
 
 	case opCmdIfList:
 		// 原版 dec case 0x12：按名字命中接口后 FUN_01076f60 起帧，逐项下发
@@ -1914,9 +1993,47 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		if err != nil || len(ifaces) == 0 {
 			return "", "ifdetail: no interfaces available"
 		}
-		// ⚠ 不再发射帧：case 体内无发射器，转发经 0x109af38→0x109af91，发射器
-		// （FUN_0100d440 @0x109b070 / @0x109b1a1、FUN_0100d300 @0x109af2a）在
-		// 那条被共享的路径上，形状与我此前自行构造的记录不符。
+		// ⚠ 不再发射帧：**本 case** 体内无发射器。转发链为
+		//   0x10966c7 → JMP 0x1096749 → JMP 0x10967cc → JMP 0x109af38
+		//   0x109af38 循环（JGE 0x109aeee），否则落到 0x109af91
+		//   0x109af91 **直线落到** 0x109b070 的发射器（已核对：0x109af91–0x109b070
+		//   之间只有跳过单条指令的短 Jcc；此前扫出的 0x109b054→0x109b0a0 是假阳性——
+		//   0x109b054 落在 0x109b051 `ADD RDI,0x4a7d` 的 disp32 内部）
+		// 该处调用：FUN_0100d440@0x109b070，格式 pool+0x4a7d = "iisX"，第一参数
+		// （即记录 kind）ECX=1；argv 由 FUN_00ec1100（EDI=3，RBX=[RSP+0x350]）构造，
+		// 取自 [RAX+0x90]（RAX=[RSP+0x198]，一个会话/客户端对象）。
+		//
+		// 实测清单（2026-09-13，全 43 槽扫描；偏移用 .rdata 0x401400 / .text 0x400a00，
+		// 三条断言把关：表内值本身即 Ghidra VA、43 个目标均落在 .text、默认槽排除）：
+		// ⚠ 可信度分级（2026-09-13 发现本清单的取法有缺陷，务必先读这段）：
+		//   下面的扫描是按「字节 0xE8」找相对调用，**不是解码指令**。0xE8 也会出现在
+		//   立即数内部，因此**长 case 体里的假阳性会累积**（实测 0x0b 这个 474 字节的
+		//   体被扫出上百个「调用」，含 0x4a095173 这类不可能的目标——那就是假阳性）。
+		//   结论分两半，可信度不同：
+		//     「不调用」行**可信**：真调用必为 0xE8 字节，扫不到就确实没有。
+		//     「调用」行**不可信**：需用真正的反汇编（Ghidra）逐条复核后才能引用。
+		//   已用 Ghidra 反汇编交叉核对过的分支（0x06/0x08/0x11/0x12/0x1a/0x1e 与
+		//   0x13/0x0f/0x14/0x25/0x26）不受影响——那些是解码结果，不是字节扫描。
+		//
+		//   体内**调用**发射器的 case：0x01 0x03 0x04 0x06 0x07 0x0b 0x0d 0x0e 0x12
+		//     0x13 0x16 0x18 0x1b 0x1f 0x23 0x24 0x27 0x28 0x29 0x2a 0x2b
+		//   体内**不调用**发射器的 case：0x02 0x08 0x09 0x0a 0x0c 0x0f 0x10 0x11 0x14
+		//     0x15 0x17 0x1a 0x1c 0x1d 0x1e 0x20 0x21 0x22 0x25 0x26
+		//   默认槽（无 case 区间）：0x05 0x19 → 共享 0x109774f
+		// 即：发射器在体内与否，与「是否已实现」无关——已实现的 0x08/0x11/0x1a/0x1c/
+		// 0x1e/0x21/0x22 体内就没有发射器（它们的返回值靠 return 传回，不靠帧）。
+		//
+		// 注（正确的一般化，勿再推广）：并非所有 case 都把发射器放在共享尾部。
+		// 实测 0x01 / 0x03 / 0x04 就在**自身体内**调用发射器
+		// （0x01、0x03 → 0x1094a20；0x04 → 0x100d240 + 0x1094a20）。因此
+		// 「case 体内无发射器 ⇒ 发射器在共享尾部」只对个别分支成立，每个 case
+		// 必须单独读其调用点。另注：默认槽 0x05/0x19 的目标 0x109774f 是**共享
+		// 的默认分支**，没有独立的 case 区间——按「下一个更高目标」划范围会把它
+		// 扩大到 20 KB 共享代码，勿用该模型。
+		//
+		// 仍不实现的原因收窄了，但仍然成立：可以确认的是**形状**（iisX，3 个 argv），
+		// 无法确认的是那 3 个 argv 的**取值**——它们来自运行期对象 [RSP+0x198] 的字段，
+		// 静态读不到。按形状发行而 argv 留空/编造，等于把「未知」包装成「已对齐」。
 		return fmt.Sprintf("ifdetail %d", len(ifaces)), ""
 
 	case opCmdProxyList:
@@ -2015,6 +2132,18 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("mtu %d", mtu), ""
 
 	case opCmdSysTime:
+		// 原版 dec case 0x19（0x1096af0–0x1096b50）实测（2026-09-13，逐条读字节）：
+		//   0x1096b07  CALL FUN_01094280          ; 取当前时间设置
+		//   0x1096b14  MOV ECX,[RCX+0x8]          ; 一个标志
+		//   0x1096b20  CMP EAX,-1 / JZ 0x1096b3e
+		//   0x1096b2d  MOV [RSP+0xd8],EAX ; ECX=2 ; JMP 0x10998915
+		//   0x1096b3e  （EAX==-1）MOVZX EDX,[RDX+0x69] ; JMP 0x10998880
+		//   0x10998915  CMP [RDX+0x28],ECX / JG ... ; MOV [RDX+0x69],AL ; JMP 0x109885b
+		// 即：本 case **不发射任何帧**（体内不调用发射器，与实测清单一致）；
+		// 它写入 local_2b0 对象的 +0x69 字节（时间设置），无参数查询读回该字节。
+		// 复刻端据此保留行为对齐（已设置标志 + 设置本机时间），下方回包文本仍为
+		// 自定文本（原版字符串在运行期池里）。
+		//
 		// 原版 dec case 0x19：无参数时 FUN_01094280 读「是否已设置系统时间」，
 		// 逐连接经 FUN_00fdf900 应用；回包是 FUN_01094ba0 下发的一个字符串。
 		//
@@ -2073,9 +2202,10 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
 
 	case opCmdUploadSpeed:
-		// 原版 dec case 0x1d：无参数 → 下发 [local_2a0[3]+0x34]；有参数 →
-		// FUN_00fc1620 写入 (int)local_280+0x74，再 FUN_00fee3a0 应用到连接
-		// （返回 7 时 FUN_00fb9a20 重建链路）。
+		// 原版 dec case 0x1d（0x1096d8c–0x1096e2c）实测（2026-09-13）：体内只调用
+		// FUN_00fc1620（4 字节大端参数解析）。**不调用 FUN_00fee3a0、不调用任何
+		// 发射器**（后者与清单一致：0x1e 体内不发帧）。此前注释里的「再 FUN_00fee3a0
+		// 应用到连接（返回 7 时 FUN_00fb9a20 重建链路）」**并未被调用**，现按字节改正。
 		if hasArg {
 			agentSendDelay = arg
 		}
@@ -2959,4 +3089,45 @@ func listConnections() []string {
 		}
 	}
 	return res
+}
+
+// setPingValue 复刻 FUN_00fb7e60 的写入侧：写最近值并维护运行最小值，返回更新后的最小值。
+// setPingValue mirrors FUN_00fb7e60's write side: store the latest value, maintain the
+// running minimum, and return the updated minimum.
+//
+//	反编译（FUN_00fb7e60）：old = DAT_1e4914f0; if (v >= 0) { DAT_1e4914f0 = v;
+//	if (v < DAT_1e4914e8 || DAT_1e4914e8 == 0) DAT_1e4914e8 = v } return old
+func setPingValue(v, min int) int {
+	agentPingLast = v
+	if v < min || min == 0 {
+		min = v
+	}
+	return min
+}
+
+// parseCommandIntArg 复刻 FUN_00fc1000：以 "0x"/"0X" 开头走十六进制（跳过前导 0，
+// 最多 0x10 位，超出视为失败），否则按十进制文本解析。
+// parseCommandIntArg mirrors FUN_00fc1000's hex/decimal split. The 0x10-digit cap is
+// the original's own limit (0x11+ digits fails); the decimal branch delegates to
+// FUN_00fc0d00 in the original, which is the standard Go-ish decimal parse.
+func parseCommandIntArg(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		body := strings.TrimLeft(s[2:], "0")
+		if len(body) > 0x10 {
+			return 0, false // 原版：0x11 位及以上判失败
+		}
+		v, err := strconv.ParseUint(body, 16, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(v), true
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }

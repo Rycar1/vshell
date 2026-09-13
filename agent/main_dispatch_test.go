@@ -238,7 +238,7 @@ func TestDispatchNativeCommandImplemented(t *testing.T) {
 func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 	pending := []byte{
 		opCmdScreenshot, opCmdConnStat, opCmdSysList,
-		opCmdPortMapDump, opCmdPipeDump, opCmdTcpPing,
+		opCmdPortMapDump, opCmdPipeDump,
 		opCmdProxyList, opCmdSysList2,
 		opCmdPing, opCmdHostScan, opCmdFileList,
 		opCmdFwdPort,
@@ -591,5 +591,28 @@ func TestIfListAndIfDetailAreImplemented(t *testing.T) {
 func TestConnListIsImplemented(t *testing.T) {
 	if _, err := dispatchNativeCommand(1, opCmdConnDump, []byte{opCmdConnDump}, 5); err != "" {
 		t.Logf("connlist reported: %v (acceptable when the host has no connections)", err)
+	}
+}
+
+// 0x12 tcpping implemented from the full body read. Semantics (see the branch
+// comment): a parsed value is stored only when > 0 and smaller than the previous
+// (or when there was none), maintaining a running minimum; the emitted scalar frame
+// carries the PREVIOUS value either way.
+func TestTcpPingIsImplemented(t *testing.T) {
+	out, errMsg := dispatchNativeCommand(1, opCmdTcpPing, []byte{opCmdTcpPing}, 5)
+	if errMsg != "" {
+		t.Fatalf("tcpping (no arg) returned error %q", errMsg)
+	}
+	if out == "" {
+		t.Fatal("tcpping returned empty output")
+	}
+	// A larger value must not displace the stored one; a smaller one must.
+	big := append([]byte{opCmdTcpPing}, []byte("0x64")...)
+	if _, e := dispatchNativeCommand(1, opCmdTcpPing, big, 5); e != "" {
+		t.Fatalf("tcpping(set 0x64) returned error %q", e)
+	}
+	small := append([]byte{opCmdTcpPing}, []byte("0x0a")...)
+	if _, e := dispatchNativeCommand(1, opCmdTcpPing, small, 5); e != "" {
+		t.Fatalf("tcpping(set 0x0a) returned error %q", e)
 	}
 }
