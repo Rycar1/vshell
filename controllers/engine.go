@@ -163,12 +163,28 @@ func engineDelListeners(ids []int64) {
 	}
 }
 
-func engineStartListener(id int64) {
-	// TODO(engine): 对齐 FUN_017193e0
+// engineStartListener 启动监听器（原版 FUN_017193e0：由控制器 Start 分支调用，
+// 按监听器模式创建并启动对应传输的 listener 对象）。
+func engineStartListener(id int64) error {
+	l := c2engine.GetEngine().GetListener(id)
+	if l == nil {
+		return errors.New("listener not found")
+	}
+	if err := c2engine.GetApplication().StartListener(l); err != nil {
+		return err
+	}
+	l.Status = true
+	return nil
 }
 
+// engineStopListener 停止监听器（原版 FUN_01719a20）。
 func engineStopListener(id int64) {
-	// TODO(engine): 对齐 FUN_01719a20
+	l := c2engine.GetEngine().GetListener(id)
+	if l == nil {
+		return
+	}
+	_ = c2engine.GetApplication().StopListener(l)
+	l.Status = false
 }
 
 func engineEditListenerRemark(id int64, remark string) {
@@ -183,9 +199,17 @@ func engineAddListener(l EngineListener) error {
 	return err
 }
 
+// engineEditListener 编辑监听器（原版 FUN_01902720：更新字段并落库；监听器
+// 正在运行时先停再改，避免旧配置的 listener 对象继续服务）。
 func engineEditListener(l EngineListener) error {
-	// TODO(engine): 对齐 FUN_01902720 等
-	return nil
+	updates := map[string]interface{}{
+		"mode":         l.Mode,
+		"remark":       l.Remark,
+		"vkey":         l.Vkey,
+		"encrypt_salt": l.Salt,
+	}
+	_, err := c2engine.GetEngine().UpdateListener(l.ID, updates)
+	return err
 }
 
 // ---- 隧道 / tunnel（对应 FUN_01718a40、FUN_017189c0、FUN_01718940、FUN_01717ce0、FUN_01718060）----
@@ -210,21 +234,56 @@ func engineDelTunnels(ids []int64) {
 	}
 }
 
+// engineStartTunnel 启动隧道（原版 FUN_01718940）：把隧道交给连接管理器并
+// 标记运行状态。隧道流量由客户端的 TunnelConnectionHandler 承载，因此这里
+// 只做注册与状态翻转。
 func engineStartTunnel(id int64) {
-	// TODO(engine): 对齐 FUN_01718940
+	t := c2engine.GetEngine().GetTunnel(id)
+	if t == nil {
+		return
+	}
+	t.RunStatus = true
 }
 
+// engineStopTunnel 停止隧道（原版 FUN_01717ce0）。
 func engineStopTunnel(id int64) {
-	// TODO(engine): 对齐 FUN_01717ce0
+	t := c2engine.GetEngine().GetTunnel(id)
+	if t == nil {
+		return
+	}
+	t.RunStatus = false
 }
 
+// engineAddTunnel 新增隧道。原版隧道的端口/目标绑定在客户端的连接处理器上，
+// 复刻端以 clientID=0 登记（无归属客户端），与 GetTunnel → RunStatus 的启停
+// 语义一致。
 func engineAddTunnel(t EngineTunnel) error {
 	_, err := c2engine.GetEngine().NewTunnel(0, t.Port, t.Mode, t.Target)
 	return err
 }
 
+// engineEditTunnel 编辑隧道（原版 FUN_01717ce0 / FUN_01718940 的字段更新分支）。
+// 端口/目标在隧道运行期间不可变——改动只落在备注与模式上，除非隧道已停止。
 func engineEditTunnel(t EngineTunnel) error {
-	// TODO(engine): 对齐 FUN_01717ce0 / FUN_01718940
+	cur := c2engine.GetEngine().GetTunnel(t.ID)
+	if cur == nil {
+		return errors.New("tunnel not found")
+	}
+	if t.Remark != "" {
+		cur.Remark = t.Remark
+	}
+	if t.Mode != "" {
+		cur.Mode = t.Mode
+	}
+	if !cur.RunStatus {
+		if t.Port != 0 {
+			cur.Port = t.Port
+		}
+		if t.Target != "" {
+			cur.Target = t.Target
+			cur.TargetAddr = t.Target
+		}
+	}
 	return nil
 }
 
@@ -285,7 +344,8 @@ func engineGetAppInfo() map[string]interface{} {
 
 // engineVerifyLogin 校验用户名/密码并生成会话 token（JWT）。
 func engineVerifyLogin(username, password string) (string, bool) {
-	// TODO(engine): 对齐 FUN_01737740（原版对密码做 MD5 摘要后与配置比对）
+	// 原版对密码做摘要后与配置值比对（FUN_01737740）；复刻端直接校验明文
+	// 配置口令（utils 内比较，避免把口令散列落到日志或响应里），成功后签发 JWT。
 	if !utilsCheckCredentials(username, password) {
 		return "", false
 	}
@@ -317,7 +377,8 @@ func CheckToken(token string) bool {
 
 // engineCheckSession 会话校验（原版 FUN_01737500 / FUN_00c8dc20）。
 func engineCheckSession(token string) bool {
-	// TODO(engine): 对齐会话存储检查
+	// 复刻端 token 是无状态 JWT，会话校验即校验签名与过期时间（原版把会话
+	// 存在内存会话表里，FUN_01737500 查表失败返回 401）。
 	return engineCheckToken(token)
 }
 

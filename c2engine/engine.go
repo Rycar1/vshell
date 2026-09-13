@@ -514,12 +514,18 @@ func (e *Engine) DelListener(id int64) error {
 
 // NewTunnel 创建新隧道。
 // NewTunnel creates a new tunnel.
+//
+// clientID==0 表示"尚未绑定客户端"的隧道：面板的 /tunnel/add 只提交
+// 端口/模式/目标，归属客户端在隧道启动时才确定，因此 0 是合法的未绑定值
+// （与 GetTunnel/Start 的 RunStatus 语义配套）。其余 ID 必须在引擎中存在。
 func (e *Engine) NewTunnel(clientID int64, port int, mode, targetAddr string) (*Tunnel, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, ok := e.clients[clientID]; !ok {
-		return nil, fmt.Errorf("client %d not found", clientID)
+	if clientID != 0 {
+		if _, ok := e.clients[clientID]; !ok {
+			return nil, fmt.Errorf("client %d not found", clientID)
+		}
 	}
 
 	e.tunnelSeq++

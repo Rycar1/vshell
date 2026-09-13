@@ -142,7 +142,10 @@ func (c *ListenerController) Start() {
 		c.JsonErr("id err")
 		return
 	}
-	engineStartListener(id)
+	if err := engineStartListener(id); err != nil {
+		c.JsonErr(err.Error())
+		return
+	}
 	c.JsonOkMessage("ok")
 }
 
