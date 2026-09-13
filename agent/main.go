@@ -1836,9 +1836,8 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		if len(conns) == 0 {
 			return "", "connlist: no connections available"
 		}
-		for _, c := range conns {
-			emitStringFrames(c)
-		}
+		// ⚠ 不再发射帧：case 体内 0 个 CALL，尾部 0x109b5c0 是无发射器的共享循环；
+		// 此前按注释发 siX 格式记录是错的。只回报枚举结果。
 		return fmt.Sprintf("connlist %d", len(conns)), ""
 
 	case opCmdPipeDump:
@@ -1886,17 +1885,16 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 			return "", "iflist: no interfaces available"
 		}
 		n := 0
-		for i, f := range ifaces {
-			addr := ""
+		for _, f := range ifaces {
 			if as, err := f.Addrs(); err == nil && len(as) > 0 {
-				addr = as[0].String()
+				n++
 			}
-			// 原版 3 字段记录：序号 / 地址 / 名称
-			emitFrames([]resultFrame{{Kind: 0x47, A: uint32(i), B: uint32(len(addr))}})
-			emitStringFrames(addr)
-			emitStringFrames(f.Name)
-			n++
 		}
+		// ⚠ 不再发射帧：本 case **确实在体内发射**，但用的是 FUN_0100d300 /
+		// FUN_0100d2a0 的记录序列 0x47 → 0x3e → 0x54(1) → 0x56(1,0xffffffff)
+		// → 0x3b(1,[RSP+0x468]) → FUN_0100e480，其中 0x3b 用的是 0x3e 记录的
+		// **回填序号**（服务器侧经 FUN_0100eac0 写入）——复刻端没有该回填链路。
+		// 我此前按注释发行的 0x47+字符串记录与真实序列不符，故删除。
 		return fmt.Sprintf("iflist %d", n), ""
 
 	case opCmdIfDetail:
@@ -1916,15 +1914,10 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		if err != nil || len(ifaces) == 0 {
 			return "", "ifdetail: no interfaces available"
 		}
-		n := 0
-		for _, f := range ifaces {
-			emitStringFrames(f.Name)
-			// 标志位（net.Flags 的位模式）与类型/MTU/硬件地址
-			emitFrames([]resultFrame{{Kind: 0x47, A: uint32(f.Flags), B: uint32(f.MTU)}})
-			emitStringFrames(f.HardwareAddr.String())
-			n++
-		}
-		return fmt.Sprintf("ifdetail %d", n), ""
+		// ⚠ 不再发射帧：case 体内无发射器，转发经 0x109af38→0x109af91，发射器
+		// （FUN_0100d440 @0x109b070 / @0x109b1a1、FUN_0100d300 @0x109af2a）在
+		// 那条被共享的路径上，形状与我此前自行构造的记录不符。
+		return fmt.Sprintf("ifdetail %d", len(ifaces)), ""
 
 	case opCmdProxyList:
 		// 原版 dec case 0x14：遍历 [local_280+0x248] 链表，每条用
@@ -1960,16 +1953,36 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		//	1096a26  XOR  EDX,EDX
 		//	1096a28  JMP  0x109894a           ; 交给共享尾部
 		//
-		// 即：本 case **不发射任何帧**（体内无 FUN_0100d160/FUN_0100d440 调用），
-		// 只算出接口索引并把 RDX 清零后跳到共享尾部 0x109894a；RBX==0 时跳
-		// 0x10989ed。真正的帧组装在这两处尾部里，尚未读。
+		// 共享尾部 0x109894a **已读**（2026-09-13），它并不发射帧，而是做一次
+		// 大小写不敏感的名字比较：
 		//
-		// 因此现存的实现（用 net.Interfaces 选接口 + emitFrames 发行
-		// FUN_0100d160(4,...) 帧）是**按我自己写错的注释实现的**，帧码与时机都无
-		// 依据。之所以不在此处修补：正确形状在共享尾部，而本轮我在字节级地址
-		// 换算上连续出错（六次），继续猜只会再错一次。
-		// 修法：读 0x109894a 与 0x10989ed 两个尾部的调用点，确定帧码与字段，
-		// 再重写本分支；在此之前不要把它当作已对齐。
+		//	109894a  CMP  EDX,0x6                 ; EDX = 本 case 算出的接口索引
+		//	109894d  JNZ  0x109895b
+		//	109894f  LEA  R9,[0x1e491a80]         ; 6 项表
+		//	1098956  XOR  R8D,R8D                 ; 索引 6 回绕到 0
+		//	1098959  JMP  0x1098975
+		//	109895b  MOVSXD R8,EDX
+		//	1098960  CMP  R8,0x6
+		//	1098964  JNC  0x1098b3b               ; 越界
+		//	109896a  LEA  R9,[0x1e491a80]
+		//	1098971  MOV  R8,[R9+R8*0x8]          ; 表项 = 8 字节**指针**
+		//	1098976  MOV  [RSP+0x1a8],R8
+		//	1098980  TEST R8,R8 / JZ 0x10989b4
+		//	1098994  CALL 0x00fc0420               ; 表项交给它
+		//
+		// 而 FUN_00fc0420 = **大小写不敏感的字符串比较**（经小写表 DAT_1e2f00a0，
+		// 与 FUN_00fc02c0 同类：后者带长度上限，前者以 NUL 结尾）：
+		//	while (len>0 && *p2 && fold[*p3]==fold[*p2]) { p2++; p3++; len--; }
+		//	return fold[*p2] - fold[*p3];
+		//
+		// 所以该分支的真实语义是：取本机接口名，与 DAT_1e491a80 里 6 个**指针**
+		// 指向的名字逐一做大小写不敏感比较。那 6 个串本身在 .data 的 BSS 段
+		// （RVA 0x1e091a80 > 文件映射上界 0x1e02d400），镜像里为零 —— 与
+		// connstat/portmap/proxylist 同类：依赖的是**原版自己的运行期内容**。
+		//
+		// 因此本分支归入「拒绝」档：现存的实现只算出接口索引就返回（不发射帧），
+		// 这是本地可复现且不伪造的部分；名字比较所依赖的 6 个串无法复原，
+		// 不再尝试还原它，也不按我之前写错的 FUN_0100d160(4,...) 描述发行帧。
 		ifaces, err := net.Interfaces()
 		if err != nil || len(ifaces) == 0 {
 			return "", "netroute: no interfaces available"
@@ -2164,9 +2177,8 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		if len(procs) == 0 {
 			return "", "proclist: no processes available"
 		}
-		for _, pr := range procs {
-			emitStringFrames(pr)
-		}
+		// ⚠ 不再发射帧：case 体内无发射器，结尾 JMP 0x1097ec0 是**共享**的分派
+		// hub；注释里的「7 字段记录」是分支描述，不是调用点。只回报枚举结果。
 		return fmt.Sprintf("proclist %d", len(procs)), ""
 
 	case opCmdSvcList:
@@ -2187,9 +2199,9 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		if len(svcs) == 0 {
 			return "", "svclist: no services available"
 		}
-		for _, s := range svcs {
-			emitStringFrames(s)
-		}
+		// ⚠ 不再发射帧：case 体内只有 1 个 CALL（FUN_01076fc0），无发射器；
+		// 结尾 JMP 0x109792f 是无发射器的共享链。我此前发的 sssiii 记录来自
+		// 反编译器把 +0x4a76 的调用误挂在 dec case 0x25 上，与 0x26 的路径无关。
 		return fmt.Sprintf("svclist %d", len(svcs)), ""
 
 	case opCmdSysInfo:
