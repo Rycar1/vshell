@@ -240,7 +240,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdScreenshot, opCmdConnStat, opCmdSysList,
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
-		opCmdNetRoute, opCmdPing, opCmdHostScan, opCmdFileList,
+		opCmdPing, opCmdHostScan, opCmdFileList,
 		opCmdProcList, opCmdSvcList,
 		opCmdFwdPort,
 	}
@@ -545,5 +545,20 @@ func TestSetGatewayIsImplemented(t *testing.T) {
 	}
 	if _, err := dispatchNativeCommand(1, opCmdSetGateway, []byte{opCmdSetGateway}, 5); err != "" {
 		t.Fatalf("setGateway(query) returned error %q", err)
+	}
+}
+
+// 0x17 (netRoute) implemented on the half that is locally determinable: the
+// dispatch frame is FUN_0100d160(4, idx, 1, n) with the local interface index and
+// name. The original's 6-entry table (DAT_1e491a80) lives in .data's BSS tail and
+// has no file bytes, so the emitted entry is this host's interface — a labelled
+// divergence — rather than the original's table row.
+func TestNetRouteIsImplemented(t *testing.T) {
+	out, err := dispatchNativeCommand(1, opCmdNetRoute, []byte{opCmdNetRoute}, 5)
+	if err != "" {
+		t.Fatalf("netRoute returned error %q", err)
+	}
+	if out == "" {
+		t.Fatal("netRoute returned empty output")
 	}
 }

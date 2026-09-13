@@ -1875,7 +1875,35 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 	case opCmdNetRoute:
 		// 原版 dec case 0x16：FUN_00fbfae0 取当前接口，在 6 项接口表
 		// DAT_1e491a80 中匹配后 FUN_0100d160(4, idx, 1, n) 逐项下发。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		//
+		// 该表是 .data 的 **BSS** 段对象（RVA 0x1e091a80 > .data 文件映射上界
+		// 0x1e02d400），镜像里为零、init 期才写入——所以 6 项接口名与顺序静态
+		// 不可读。此前我把它当成「不在任何数据段」，那是把 Ghidra VA 当 RVA 比
+		// 对；地址本身没问题，缺的是它的**内容**。
+		//
+		// 与 setDomain/setGateway 的区别正在这里：那两个分支只依赖「设置/清空/
+		// 回读」行为，故可实现；本分支要下发表中的项，依赖的是内容，不可复原。
+		//
+		// 复刻端仍可实现**一半**：取当前接口表与索引（Go 的 net.Interfaces +
+		// net.InterfaceByName），用原版的帧码 4（FUN_0100d160(4, idx, 1, n)）
+		// 本地选出条目并下发。下发的是本机的接口，不是原版那份 6 项表——故
+		// 该实现标注为偏差。
+		ifaces, err := net.Interfaces()
+		if err != nil || len(ifaces) == 0 {
+			return "", "netroute: no interfaces available"
+		}
+		idx := 0
+		for i, f := range ifaces {
+			if f.Flags&net.FlagUp != 0 && f.Flags&net.FlagLoopback == 0 {
+				idx = i
+				break
+			}
+		}
+		name := ifaces[idx].Name
+		// 原版帧：FUN_0100d160(4, idx, 1, n)
+		emitFrames([]resultFrame{{Kind: 4, A: 1, B: uint32(len(name))}})
+		emitStringFrames(name)
+		return fmt.Sprintf("netroute %d %s", idx, name), ""
 
 	case opCmdMtu:
 		// 原版 dec case 0x17：local_398+0x218 初值 -2；有参数 → FUN_00fc1000
