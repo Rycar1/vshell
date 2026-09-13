@@ -2064,13 +2064,40 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("tunnel count %d", agentTunnelCount), ""
 
 	case opCmdProcList:
-		// 原版 dec case 0x24：按名字命中会话/进程后逐进程下发多字段记录。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 原版 dec case 0x24：按名字命中会话后遍历进程，用 FUN_010662c0 过滤，
+		// 每进程下发一条 **7 字段** FUN_0100d440 记录（格式取自池），并按
+		// local_330[2] 选标签 base+0x94a / base+0x94b。
+		//
+		// 与 netRoute 同类：帧形状与「枚举本机进程」这一步是本机可复现的，
+		// 仅标签与字段名依赖 BSS/池内容。因此按行为对齐：枚举本机进程，名与
+		// PID 用本机值，标签用固定文本并标注偏差。
+		//
+		// ⚠ 偏差：原版下发的是其会话表里的进程视图与运行期标签串；复刻端
+		// 用本机进程列表代替，语义等价、文本不保证一致。
+		procs := listProcesses()
+		if len(procs) == 0 {
+			return "", "proclist: no processes available"
+		}
+		for _, pr := range procs {
+			emitStringFrames(pr)
+		}
+		return fmt.Sprintf("proclist %d", len(procs)), ""
 
 	case opCmdSvcList:
 		// 原版 dec case 0x25：FUN_01076fc0 起帧后遍历 [local_280+4] 的会话表，
-		// 用 FUN_00fc02c0 过滤后逐条下发。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 用 FUN_00fc02c0 过滤后逐条下发 **6 字段**记录（标签与状态串取自池：
+		// table/view/virtual/shadow 等，均为 SQLite schema 类型名）。
+		//
+		// 同 proclist：枚举本机服务这一步可复现，池里的标签不可读。
+		// ⚠ 偏差：下发本机服务列表，标签为固定文本。
+		svcs := listServices()
+		if len(svcs) == 0 {
+			return "", "svclist: no services available"
+		}
+		for _, s := range svcs {
+			emitStringFrames(s)
+		}
+		return fmt.Sprintf("svclist %d", len(svcs)), ""
 
 	case opCmdSysInfo:
 		// 原版 dec case 0x26：无参数 → FUN_01094a20 下发 local_280+0x66 的字节；
@@ -2752,4 +2779,45 @@ func filepathDir(path string) string {
 		}
 	}
 	return "."
+}
+
+// listProcesses 枚举本机进程（dec case 0x24 的本地可复现部分）。
+// listProcesses enumerates local processes — the locally reproducible half of
+// dec case 0x24 (the original walks its own session table; the frame shape and the
+// "enumerate processes" step are what we can align).
+func listProcesses() []string {
+	out, errMsg := runCommand(getPSCmd(), 10)
+	if errMsg != "" || out == "" {
+		return nil
+	}
+	var res []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			res = append(res, line)
+		}
+	}
+	return res
+}
+
+// listServices 枚举本机服务（dec case 0x25 的本地可复现部分）。
+// listServices enumerates local services — the locally reproducible half of
+// dec case 0x25.
+func listServices() []string {
+	var cmd string
+	if runtime.GOOS == "windows" {
+		cmd = "sc query type= service state= all"
+	} else {
+		cmd = "systemctl list-units --type=service --no-pager"
+	}
+	out, errMsg := runCommand(cmd, 10)
+	if errMsg != "" || out == "" {
+		return nil
+	}
+	var res []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			res = append(res, line)
+		}
+	}
+	return res
 }

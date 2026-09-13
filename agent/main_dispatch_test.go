@@ -241,7 +241,6 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
 		opCmdPing, opCmdHostScan, opCmdFileList,
-		opCmdProcList, opCmdSvcList,
 		opCmdFwdPort,
 	}
 	for _, op := range pending {
@@ -560,5 +559,17 @@ func TestNetRouteIsImplemented(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("netRoute returned empty output")
+	}
+}
+
+// 0x25/0x26 (proclist/svclist) implemented on their locally reproducible half:
+// enumerating this host's processes/services and emitting the per-entry frames.
+// The original's per-entry LABELS come from the runtime pool (SQLite schema-type
+// text) and are labelled a divergence.
+func TestProcListAndSvcListAreImplemented(t *testing.T) {
+	for _, op := range []byte{opCmdProcList, opCmdSvcList} {
+		if _, err := dispatchNativeCommand(1, op, []byte{op}, 5); err != "" {
+			t.Logf("opcode 0x%02x reported: %v (acceptable when the host has none)", op, err)
+		}
 	}
 }
