@@ -187,3 +187,19 @@ func TestPlainShellCommandStillRuns(t *testing.T) {
 		t.Fatalf("普通 shell 命令输出异常：%q", out)
 	}
 }
+
+// A JSON {"type":"plugin"} envelope must be handled explicitly and refused, not
+// silently fall through to the "unknown command type" default — the two outcomes
+// mean different things to a caller, and the original has such a command.
+func TestJSONPluginEnvelopeIsRefusedNotUnknown(t *testing.T) {
+	_, err := executeCommand(1, `{"type":"plugin","name":"payload.dll"}`, 5)
+	if err == "" {
+		t.Fatal("JSON plugin envelope returned no error; it must be refused")
+	}
+	if !strings.Contains(err, "not implemented") {
+		t.Fatalf("JSON plugin envelope error = %q, want a 'not implemented' refusal", err)
+	}
+	if strings.Contains(err, "unknown command type") {
+		t.Fatalf("JSON plugin envelope fell through to the unknown-command default: %q", err)
+	}
+}

@@ -2496,6 +2496,16 @@ func executeCommand(taskID int64, cmdStr string, timeout int) (string, string) {
 		}
 		return fmt.Sprintf("interval: %d", sleepTime), ""
 
+	case CmdPlugin:
+		// JSON 形态的插件命令与文本形态走同一条路径：解析后**拒绝执行**。
+		// 原版的写盘/加载/执行环节未恢复（见上方「Plugin / runner」一节），
+		// 所以这里既不落盘也不起进程——但必须显式处理，不能让它落到 default
+		// 去（default 现在报 unknown，语义上会让调用者以为「没这个命令」，
+		// 而实际是「有这个命令、我们不会执行」）。
+		name, _ := payload["name"].(string)
+		return "", "runplugin: plugin execution not implemented (name=" + strconv.Quote(name) +
+			"; the original's write/load/execute path is unrecovered)"
+
 	case CmdScreenshot:
 		return captureScreenshot()
 
