@@ -569,10 +569,11 @@ func (kl *KCPListener) handleSession(conn *kcp.UDPSession) {
 	username, _ := handshake["UserName"].(string)
 	osName, _ := handshake["OsName"].(string)
 	processName, _ := handshake["ProcessName"].(string)
+	arch, _ := handshake["Arch"].(string)
 
 	client, err := engine.NewClient(
 		vkey, "kcp", conn.RemoteAddr().String(), "",
-		username, hostname, osName, processName,
+		username, hostname, osName, processName, arch,
 	)
 	if err != nil {
 		conn.Close()
@@ -968,7 +969,7 @@ func (cws *CDNWebSocketListener) HandleCDNWebSocketConnection(conn net.Conn, ver
 	client, err := engine.NewClient(
 		checkin.VerifyKey, "cdn_ws", conn.RemoteAddr().String(),
 		checkin.LocalIP, checkin.UserName, checkin.HostName,
-		checkin.OsName, checkin.ProcessName,
+		checkin.OsName, checkin.ProcessName, checkin.Arch,
 	)
 	if err != nil {
 		return err

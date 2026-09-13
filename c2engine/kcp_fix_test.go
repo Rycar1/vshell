@@ -287,13 +287,13 @@ func TestEngineBlockedKeyRejectsCheckin(t *testing.T) {
 	e.BlockKey("banned-key")
 	defer e.UnblockKey("banned-key")
 
-	_, err := e.NewClient("banned-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent")
+	_, err := e.NewClient("banned-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent", "amd64")
 	if err == nil {
 		t.Fatal("NewClient with a blocked verify key should fail")
 	}
 
 	// A different key must still be accepted.
-	c, err := e.NewClient("allowed-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent")
+	c, err := e.NewClient("allowed-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent", "amd64")
 	if err != nil {
 		t.Fatalf("NewClient with allowed key failed: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestEngineBlockedKeyRejectsCheckin(t *testing.T) {
 
 	// Unblocking restores access.
 	e.UnblockKey("banned-key")
-	if _, err := e.NewClient("banned-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent"); err != nil {
+	if _, err := e.NewClient("banned-key", "http", "1.2.3.4:5", "", "u", "h", "linux", "agent", "amd64"); err != nil {
 		t.Fatalf("NewClient after unblock failed: %v", err)
 	}
 }

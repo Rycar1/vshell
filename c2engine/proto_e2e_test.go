@@ -2,63 +2,16 @@ package c2engine
 
 import (
 	"bytes"
-	"encoding/base64"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-// TestProtocolEncodeDecodeRoundTrip verifies the full message pipeline:
-// JSON → AES-GCM encrypt → base64 → decode → decrypt → JSON, and the
-// gzip compression round trip.
-func TestProtocolEncodeDecodeRoundTrip(t *testing.T) {
-	key := DeriveKey("testsalt", "testvkey")
-	if len(key) != 32 {
-		t.Fatalf("DeriveKey len = %d, want 32", len(key))
-	}
-
-	msg := CheckinRequest{
-		VerifyKey:   "testvkey",
-		HostName:    "host1",
-		UserName:    "user1",
-		OsName:      "windows",
-		ProcessName: "agent.exe",
-		LocalIP:     "10.0.0.1",
-	}
-
-	// Encrypt path
-	enc, err := EncodeMessage(msg, key)
-	if err != nil {
-		t.Fatalf("EncodeMessage: %v", err)
-	}
-	// Must be base64 of AES-GCM (nonce + ciphertext)
-	raw, err := base64.StdEncoding.DecodeString(string(enc))
-	if err != nil {
-		t.Fatalf("payload not base64: %v", err)
-	}
-	if len(raw) < 12+16 {
-		t.Fatalf("ciphertext too short: %d", len(raw))
-	}
-
-	// Decrypt path
-	var decoded CheckinRequest
-	if err := DecodeMessage(enc, &decoded, key); err != nil {
-		t.Fatalf("DecodeMessage: %v", err)
-	}
-	if decoded.VerifyKey != "testvkey" || decoded.HostName != "host1" || decoded.OsName != "windows" {
-		t.Errorf("decoded mismatch: %+v", decoded)
-	}
-
-	// Wrong key must fail
-	var bad CheckinRequest
-	if err := DecodeMessage(enc, &bad, DeriveKey("wrongsalt", "wrongvkey")); err == nil {
-		t.Error("DecodeMessage with wrong key should fail")
-	}
-}
-
 // TestProtocolCompressionRoundTrip verifies gzip compress/decompress.
+// (CompressPayload/DecompressPayload are live: c2engine/payload.go uses them
+// for staged payloads, so they stay even though the envelope tests are gone.)
 func TestProtocolCompressionRoundTrip(t *testing.T) {
 	payload := bytes.Repeat([]byte("hello vshell "), 1000)
 	compressed, err := CompressPayload(payload)
@@ -118,8 +71,8 @@ func TestProtocolHTTPCheckinFlow(t *testing.T) {
 	e.listeners[99] = listener
 	cl := NewC2Listener(listener)
 
-	// 1. Encrypted checkin
-	key := DeriveKey(listener.EncryptSalt, listener.VerifyKey)
+	// 1. Encrypted checkin — agent transport frame:
+	//    <u32 LE len><[12B nonce][ct][16B tag]>, key = FrameSaltKey(salt).
 	checkin := CheckinRequest{
 		VerifyKey:   "e2e-vkey",
 		HostName:    "e2e-host",
@@ -128,7 +81,11 @@ func TestProtocolHTTPCheckinFlow(t *testing.T) {
 		ProcessName: "agent",
 		LocalIP:     "192.168.1.10",
 	}
-	body, _ := EncodeMessage(checkin, key)
+	payload, _ := json.Marshal(checkin)
+	body, err := FrameEncrypt(payload, listener.EncryptSalt)
+	if err != nil {
+		t.Fatalf("FrameEncrypt: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/checkin", bytes.NewReader(body))
 	req.RemoteAddr = "192.168.1.10:5555"
@@ -170,7 +127,11 @@ func TestProtocolHTTPCheckinFlow(t *testing.T) {
 		VerifyKey: "e2e-vkey",
 	}
 	resultBody, _ := json.Marshal(result)
-	req3 := httptest.NewRequest(http.MethodPost, "/api/result", bytes.NewReader(resultBody))
+	encResult, err := FrameEncrypt(resultBody, listener.EncryptSalt)
+	if err != nil {
+		t.Fatalf("FrameEncrypt result: %v", err)
+	}
+	req3 := httptest.NewRequest(http.MethodPost, "/api/result", bytes.NewReader(encResult))
 	w3 := httptest.NewRecorder()
 	cl.handlePostResult(w3, req3)
 	if w3.Code != http.StatusOK {

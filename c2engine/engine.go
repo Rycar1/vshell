@@ -120,7 +120,17 @@ func refresh(dst *string, src string) {
 	}
 }
 
-func (e *Engine) NewClient(verifyKey, clientType, addr, localIP, userName, hostName, osName, processName string) (*Client, error) {
+// NewClient 按签到信息注册或刷新客户端。
+// NewClient registers or refreshes a client from its check-in.
+//
+// arch 取自 Agent 签到（CheckinRequest.Arch / KCP 握手的 "Arch" 字段，agent 侧
+// main.Checkin 上报 runtime.GOARCH）。原版把架构存在客户端对象里供
+// RunnerController.RunPlugin 选择 .dll/.net/.exe 的平台插件（FUN_0164bde0 的
+// 0="386"/1="amd64" 分类）以及 TerminalController 的 windows_amd64 检查使用；
+// 复刻端此前在调用处丢弃了该字段，导致 client.Arch 恒为空、插件下发恒被拒。
+// arch comes from the agent's check-in; dropping it here made client.Arch
+// permanently empty and every RunPlugin call fail.
+func (e *Engine) NewClient(verifyKey, clientType, addr, localIP, userName, hostName, osName, processName, arch string) (*Client, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -144,6 +154,7 @@ func (e *Engine) NewClient(verifyKey, clientType, addr, localIP, userName, hostN
 			refresh(&client.HostName, hostName)
 			refresh(&client.OsName, osName)
 			refresh(&client.ProcessName, processName)
+			refresh(&client.Arch, arch)
 			client.AddConn()
 			return client, nil
 		}
@@ -156,6 +167,7 @@ func (e *Engine) NewClient(verifyKey, clientType, addr, localIP, userName, hostN
 	client.HostName = hostName
 	client.OsName = osName
 	client.ProcessName = processName
+	client.Arch = arch
 	client.CreatedAt = time.Now()
 
 	e.clients[client.ID] = client

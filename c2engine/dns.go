@@ -199,6 +199,8 @@ func (dl *DNSListener) processMessage(agentID, data, remoteAddr string) string {
 			osName = parts[2]
 		}
 
+		// DNS 注册载荷是 "hostname|username|osname" 三段，不带架构字段（原版
+		// DNS 通道的注册串同样只到这里），因此 Arch 留空。
 		client, err := engine.NewClient(
 			dl.VerifyKey,
 			"dns",
@@ -208,6 +210,7 @@ func (dl *DNSListener) processMessage(agentID, data, remoteAddr string) string {
 			hostname,
 			osName,
 			"dns_agent",
+			"",
 		)
 		if err != nil {
 			return "err:register_failed"
