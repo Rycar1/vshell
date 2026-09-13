@@ -241,7 +241,7 @@ func TestDispatchNativeCommandUnimplemented(t *testing.T) {
 		opCmdPortMapDump, opCmdConnDump, opCmdPipeDump, opCmdTcpPing,
 		opCmdIfList, opCmdIfDetail, opCmdProxyList, opCmdSysList2,
 		opCmdNetRoute, opCmdPing, opCmdHostScan, opCmdFileList,
-		opCmdTunnelCount, opCmdProcList, opCmdSvcList, opCmdSetDomain,
+		opCmdProcList, opCmdSvcList, opCmdSetDomain,
 		opCmdFwdPort,
 	}
 	for _, op := range pending {
@@ -505,5 +505,17 @@ func TestSysTimeIsImplemented(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("sysTime query returned empty output")
+	}
+}
+
+// 0x24 (tunnelCount) implemented: both branches are fully described by the
+// decompilation and neither depends on a runtime-built string. No arg reports
+// (count-1); with an arg the count rotates via (n+1)&7 with 0 treated as 1.
+func TestTunnelCountIsImplemented(t *testing.T) {
+	if _, err := dispatchNativeCommand(1, opCmdTunnelCount, nil, 5); err != "" {
+		t.Fatalf("tunnelCount query returned error %q", err)
+	}
+	if _, err := dispatchNativeCommand(1, opCmdTunnelCount, []byte(nativeBlock(opCmdTunnelCount, 3)), 5); err != "" {
+		t.Fatalf("tunnelCount set returned error %q", err)
 	}
 }

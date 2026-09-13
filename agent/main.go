@@ -950,6 +950,8 @@ var (
 	// agentTunnelDumpState 对应 dec case 0x7 落盘的那个布尔（FUN_010836e0）。
 	agentTunnelDumpState int
 	agentSysTimeSet      bool // 原版 dec case 0x19 的「系统时间已设置」标志
+	// agentTunnelCount 对应 dec case 0x23 读写的 local_2a0 记录 +2 字节。
+	agentTunnelCount int
 	// agentSysInfoMode 对应 dec case 0x26 的 local_280+0x66 字节。
 	agentSysInfoMode int
 )
@@ -1982,9 +1984,23 @@ func dispatchNativeCommand(taskID int64, op byte, argv []byte, timeout int) (str
 		return fmt.Sprintf("destroy scheduled %d", delay), ""
 
 	case opCmdTunnelCount:
-		// 原版 dec case 0x23：无参数 → 0x2a0 记录 +2 字节（tunnel 通道数）减 1
-		// 下发；有参数 → 该字节按 (n+1)&7 轮转（0 视作 1）后落盘。
-		return "", "opcode 0x" + strconv.FormatInt(int64(op), 16) + " (" + name + ") not implemented"
+		// 原版 dec case 0x23：无参数 → 取 local_2a0 记录 +2 处的字节（tunnel 通道
+		// 数）减 1 后下发；有参数 → 该字节按 (n+1)&7 轮转（0 视作 1），并
+		// FUN_01094c40 落盘。
+		//
+		// 两个分支都由反编译完整描述，无运行期字符串依赖，故按原样实现。
+		// 复刻端该计数即本 agent 的 tunnel 通道数状态；原版的「落盘」对应这里的
+		// 状态保留（复刻端没有那个持久化文件，不伪造写盘）。
+		if !hasArg {
+			emitScalarFrames(agentTunnelCount - 1)
+			return fmt.Sprintf("tunnel count %d", agentTunnelCount), ""
+		}
+		next := (arg + 1) & 7
+		if next == 0 {
+			next = 1
+		}
+		agentTunnelCount = next
+		return fmt.Sprintf("tunnel count %d", agentTunnelCount), ""
 
 	case opCmdProcList:
 		// 原版 dec case 0x24：按名字命中会话/进程后逐进程下发多字段记录。
